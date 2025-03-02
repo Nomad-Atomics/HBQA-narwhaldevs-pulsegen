@@ -437,18 +437,38 @@ def software_retrigger_check(pg):
     pg.write_action(trigger_now=True)
     [print(msg) for msg in pg.read_all_messages(timeout=0.1)]
 
+def run_timer_test(pg):
+    instructions = []
+    instructions.append(pg.encode_instruction(address = 0, duration = 1, state = np.ones(24)))
+    instructions.append(pg.encode_instruction(address = 1, duration = int(1/10E-9), state = np.zeros(24), notify_computer=True))
+    # instructions.append(pg.encode_instruction(address = 1, duration = 1, state = np.zeros(24)))
+    pg.write_instructions(instructions)
+    pg.write_device_options(final_address=len(instructions)-1, run_mode='single', accept_hardware_trigger='never', trigger_out_length=1, trigger_out_delay=0, notify_on_main_trig_out=False, notify_when_run_finished=True, software_run_enable=True)
+
+    # Trigger the device in software to start it running
+    pg.write_action(trigger_now=True)
+    [print(msg) for msg in pg.read_all_messages(timeout=1.1)]
+
+    # [print(key,':',value) for key, value in pg.get_state().items()]
+    # [print(key,':',value) for key, value in pg.get_powerline_state().items()]
+    [print(key,':',value) for key, value in pg.get_state_extras().items()]
+    pg.write_action(reset_run=True)
+    [print(key,':',value) for key, value in pg.get_state_extras().items()]
 
 if __name__ == "__main__":
 
     pg = ndpulsegen.PulseGenerator()
-    # print(pg.get_connected_devices())
-    pg.connect(serial_number=12582915)
-    pg2 = ndpulsegen.PulseGenerator()
-    # print(pg.get_connected_devices())
-    pg2.connect(serial_number=12582917)
+    print(pg.get_connected_devices())
+    # pg.connect(serial_number=12582915)
+    pg.connect(serial_number=12582917)
+    # pg2 = ndpulsegen.PulseGenerator()
+    # # print(pg.get_connected_devices())
+    # pg2.connect(serial_number=12582917)
 
-    quick_check(pg2) 
-    quick_check(pg)
+    run_timer_test(pg)
+
+    # quick_check(pg2) 
+    # quick_check(pg)
     # quick_count(pg)
     # specific_count(pg)
 

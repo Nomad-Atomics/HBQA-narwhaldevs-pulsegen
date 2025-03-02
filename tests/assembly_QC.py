@@ -241,8 +241,8 @@ if __name__ == "__main__":
     print(pg.get_connected_devices())
     pg.connect()
 
-    ref_clk(pg)
+    # ref_clk(pg)
     # trigger(pg)
     # enable(pg)
     # powerline_sync(pg)
-    # channels_connection_check(pg)
+    channels_connection_check(pg)
