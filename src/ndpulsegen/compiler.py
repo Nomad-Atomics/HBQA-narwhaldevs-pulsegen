@@ -1,162 +1,99 @@
-import numpy as np
-
-# class Compiler():
-#     def __init__(self):
-#         self.transitions = {}
-#         self.starting_state = np.zeros(24)
-
-#     def add_transition(self, clock_cycles, vals):
-#         """
-#         clock_cycles is when the transition will happen (measured in clock cycles)
-#         vals is a dictionary of the form {channel_number: digital_value, channel_number: digital_value, ..., stop_and_wait: True/False, other_flags}
-#         Ultimately we will make instructions from this information.
-#         If clock_cycles has been added before, the new channels should just be added.
-#         If a channel for this clock cycle has already been added, it will be overwritten.
-#         """
-
-#         if clock_cycles in self.transitions:
-#             self.transitions[clock_cycles].update(vals)
-#         else:
-#             self.transitions[clock_cycles] = vals.copy()
-
-#             '''NOTe TO SELF.
-#             IN THE FIRMWARE, THERE IS 1.002 AND 1.002a 
-#             The a version have the zero duration error detection. 
-#             I don't know why I kept the 1.002 version around. But I should probably get rid of it, because it is confusing.'''
-
-#     def compile(self):
-#         """
-#         Compiles the transitions into a list of instructions.
-        
-#         For each transition (specified by clock_cycles), an instruction is created with:
-#         - an 'address' that starts at 0 and increments for each instruction,
-#         - a 'duration' that is computed as the difference in clock cycles between the current transition and the next one.
-        
-#         The instructions are returned as a list of dictionaries. Each dictionary has the keys:
-#         - "address": the sequential address for the instruction,
-#         - "duration": the number of clock cycles until the next transition (0 for the last instruction),
-#         - "vals": the dictionary of channel values associated with the transition.
-#         """
-#         # Sort the transitions by their clock cycle keys.
-#         sorted_transitions = sorted(self.transitions.items())
-        
-#         instructions = []
-#         state = self.starting_state
-        
-#         # Iterate over the sorted transitions to create instructions.
-#         for i, (clock, vals) in enumerate(sorted_transitions):
-#             # Calculate duration: if there's a next transition, subtract current clock cycle from the next one.
-#             # For the last instruction, we set the duration to 1.
-#             if i < len(sorted_transitions) - 1:
-#                 next_clock = sorted_transitions[i + 1][0]
-#                 duration = next_clock - clock
-#             else:
-#                 duration = 1 # minimum duration is 1
-            
-#             instruction = {
-#                 "address": i,
-#                 "duration": duration,
-#                 "vals": vals
-#             }
-#             instructions.append(instruction)
-        
-#         return instructions
-    
-
+from .transcode import encode_instruction
 
 class Compiler:
     def __init__(self):
-        self.transitions = {}
-        self.starting_state = np.zeros(24)
+        self.updates = {}
+        self.sequence_duration = None
+        self.starting_state = {i: False for i in range(24)}
+        self.instructions = []
 
-    def add_transition(self, clock_cycles, vals):
-        """
-        clock_cycles is when the transition will happen (measured in clock cycles)
-        vals is a dictionary of the form {channel_number or flag_key: value, ...}
-        If clock_cycles has been added before, the new channels/flags are added.
-        If a key for this clock cycle has already been added, it will be overwritten.
-        """
-        if clock_cycles in self.transitions:
-            self.transitions[clock_cycles].update(vals)
-        else:
-            self.transitions[clock_cycles] = vals.copy()
+    def clear_updates(self):
+        self.updates = {}
+        self.sequence_duration = None
+
+    def add_update(self,
+                    time_clockcycles: int,
+                    state_dict: dict = None,
+                    goto_address: int = None,
+                    goto_counter: int = None,
+                    stop_and_wait: bool = None,
+                    hardware_trig_out: bool = None,
+                    notify_computer: bool = None,
+                    powerline_sync: bool = None) -> None:
+        '''
+        Add or update a transition at a specified clock cycle.
+
+        Parameters:
+            time_clockcycles (int): The clock cycle when the transition will occur.
+            state_dict (dict, optional): A dictionary of states in the form {channel_number: bool, ...}.
+                Only include the channels you want to change; you may include channels even if the value
+                is not actually changing.
+            goto_address (int, optional): Address for the goto operation.
+            goto_counter (int, optional): Counter value for the goto operation.
+            stop_and_wait (bool, optional): Flag to enable stop-and-wait behavior.
+            hardware_trig_out (bool, optional): Flag to trigger hardware output.
+            notify_computer (bool, optional): Flag to notify the computer.
+            powerline_sync (bool, optional): Flag for powerline synchronization.
+
+        Behavior:
+            If an entry for the specified time_clockcycles already exists in self.updates, this function
+            will update the existing states and flags. If a state or flag is provided that already exists,
+            its value will be updated. Otherwise, new states or flags will be added to the transition.
+        '''
+        if time_clockcycles not in self.updates:
+            self.updates[time_clockcycles] = {'states': {}, 'flags': {}}
+        
+        if state_dict is not None:
+            self.updates[time_clockcycles]['states'].update(state_dict)
+
+        # Build a dictionary of flags, filtering out None values
+        flags = {key: value for key, value in {
+            "goto_address": goto_address,
+            "goto_counter": goto_counter,
+            "stop_and_wait": stop_and_wait,
+            "hardware_trig_out": hardware_trig_out,
+            "notify_computer": notify_computer,
+            "powerline_sync": powerline_sync
+        }.items() if value is not None}
+        
+        self.updates[time_clockcycles]['flags'].update(flags)
 
     def compile(self):
-        """
-        Compiles the transitions into a list of instructions that include a full set
-        of parameters required by the `encode_instruction` function. The compile process
-        accumulates changes over time, using default values for each parameter that isn’t
-        updated at a given transition.
-        """
-        current_state = self.starting_state
-        current_instr = {}
-        # add the digital state
-        for channel_idx, val in current_state:
-            current_instr[channel_idx] = val
+        '''
+        Uses the updates to generate encoded instructions ready for writing to a PulseGenerator
+        '''
+        self.instructions = []
+        if len(self.updates) == 0:
+            return
         
-        default_flags = {
-            'stop_and_wait': False,
-            'hardware_trig_out': False,
-            'notify_computer': False,
-            'powerline_sync': False,
-        }
-        current_instr.update{default_flags}
-
-        # Sort transitions by clock cycle time
-        sorted_transitions = sorted(self.transitions.items())
+        # Sort transitions by clock cycle time. sorted_updates is now a list of the form [(time_clockcycles, {'states':{}, 'flags':{}}), ...]
+        sorted_updates = sorted(self.updates.items())
         
-        instructions = []
-        
-        # for i, (time, changes) in enumerate(sorted_transitions):
-        for time, changes in sorted_transitions:
-            # Determine the duration for the previous instruction.
-            duration = time - prev_time
-            # Create the complete instruction using the current state.
-            current_instr.update(changes)
+        current_state = self.starting_state.copy()
 
-            # now I want to turn the channel state into a list or array
-            for channel in range(24):
-                current_state[channel] = current_instr[channel]
+        if sorted_updates[0][0] != 0:
+            # The instruction at t=0 was not specified.
+            # The PulseGenerator always executes the first instruction immeadiately upon initial triggering (either software or hardware triggering), so this must be specified.
+            sorted_updates.insert(0, (0, {'states':current_state.copy(), 'flags':{}}))
 
-            instruction = {
-                "address": len(instructions),
-                "duration": duration,
-                # Include all other parameters from current_instr.
-                "state": current_state,
-                "stop_and_wait": current_instr['stop_and_wait'],
-                "hardware_trig_out": current_instr['hardware_trig_out'],
-                "notify_computer": current_instr['notify_computer'],
-                "powerline_sync": current_instr['powerline_sync']
-            }
-            instructions.append(instruction)
-            
-            # Update the current instruction with changes from this transition.
-            for key, value in changes.items():
-                if isinstance(key, int):
-                    # Assume an integer key refers to a channel number.
-                    # Update the corresponding bit in the state bitfield.
-                    if value:
-                        # Set the bit corresponding to channel 'key'
-                        current_instr['state'] |= (1 << key)
-                    else:
-                        # Clear the bit corresponding to channel 'key'
-                        current_instr['state'] &= ~(1 << key)
-                else:
-                    # For non-integer keys, assume they refer to instruction flags
-                    current_instr[key] = value
-            prev_time = time
+        # The last update needs to be given a duration. Either it is inferred from self.sequence_duration or it is set to 1
+        final_update_time = sorted_updates[-1][0]
+        if self.sequence_duration is None:
+            final_update_duration = 1
+        else:
+            final_update_duration = self.sequence_duration - final_update_time
+            assert final_update_duration >= 1
+        # appending a dummy update is the easy way to make the next bit work
+        sorted_updates.append((final_update_time + final_update_duration, {'states':{}, 'flags':{}}))
 
-        # Add the final instruction; duration can be set to 0 (or another sentinel value)
-        instructions.append({
-            "address": len(instructions),
-            "duration": 0,
-            "state": current_instr['state'],
-            "goto_address": current_instr['goto_address'],
-            "goto_counter": current_instr['goto_counter'],
-            "stop_and_wait": current_instr['stop_and_wait'],
-            "hardware_trig_out": current_instr['hardware_trig_out'],
-            "notify_computer": current_instr['notify_computer'],
-            "powerline_sync": current_instr['powerline_sync'],
-        })
-        
-        return instructions
+        for address, (current_update, next_update) in enumerate(zip(sorted_updates, sorted_updates[1:])):
+            current_duration = next_update[0] - current_update[0]
+            current_state.update(current_update[1]['states'])
+            state = [current_state[i] for i in range(24)]
+
+            self.instructions.append(encode_instruction(address, current_duration, state, **current_update[1]['flags']))
+
+    def upload_instructions(self, pulsegenerator_obj):
+        '''An extremely thin wrapper around some PulseGenerator methods to upload the instructions and final address in one call'''
+        pulsegenerator_obj.write_instructions(self.instructions)
+        pulsegenerator_obj.write_device_options(final_address=len(self.instructions) - 1)

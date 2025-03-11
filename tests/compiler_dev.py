@@ -12,11 +12,11 @@ def basic_compiler_test():
     cplr = ndpulsegen.Compiler()
 
     cplr.starting_state[3] = False
-    cplr.add_transition(0, {0: True, 2:True})
-    cplr.add_transition(1, {0: False})
-    cplr.add_transition(7, {'notify_computer':True})
+    cplr.add_update(0, {0: True, 2:True})
+    cplr.add_update(7, {0: False})
+    cplr.add_update(3, notify_computer=True)
 
-    print(cplr.transitions)
+    # print(cplr.updates)
     print(cplr.compile())
 
 
