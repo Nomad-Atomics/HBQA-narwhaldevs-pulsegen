@@ -1,99 +1,202 @@
 from .transcode import encode_instruction
+from .comms import PulseGenerator
 
 class Compiler:
     def __init__(self):
-        self.updates = {}
-        self.sequence_duration = None
+        self.updates = {}  # Dictionary keyed by absolute time; each entry is {'states': {}, 'flags': {}}
         self.starting_state = {i: False for i in range(24)}
         self.instructions = []
+        self.channels = {}  # Cache for Channel objects
+        self.sequence_duration = None  # Optional overall sequence duration
 
-    def clear_updates(self):
-        self.updates = {}
-        self.sequence_duration = None
+    def set_starting_state(self, state_dict: dict):
+        """Update the starting state for multiple channels."""
+        self.starting_state.update(state_dict)
 
-    def add_update(self,
-                    time_clockcycles: int,
-                    state_dict: dict = None,
-                    goto_address: int = None,
-                    goto_counter: int = None,
-                    stop_and_wait: bool = None,
-                    hardware_trig_out: bool = None,
-                    notify_computer: bool = None,
-                    powerline_sync: bool = None) -> None:
-        '''
-        Add or update a transition at a specified clock cycle.
+    def add_update(self, t: int, state_dict: dict = None, **flags):
+        """
+        Schedule an update at time 't'. This method requires an absolute time.
+        """
+        if t not in self.updates:
+            self.updates[t] = {'states': {}, 'flags': {}}
+        if state_dict:
+            self.updates[t]['states'].update(state_dict)
+        if flags:
+            self.updates[t]['flags'].update(flags)
 
-        Parameters:
-            time_clockcycles (int): The clock cycle when the transition will occur.
-            state_dict (dict, optional): A dictionary of states in the form {channel_number: bool, ...}.
-                Only include the channels you want to change; you may include channels even if the value
-                is not actually changing.
-            goto_address (int, optional): Address for the goto operation.
-            goto_counter (int, optional): Counter value for the goto operation.
-            stop_and_wait (bool, optional): Flag to enable stop-and-wait behavior.
-            hardware_trig_out (bool, optional): Flag to trigger hardware output.
-            notify_computer (bool, optional): Flag to notify the computer.
-            powerline_sync (bool, optional): Flag for powerline synchronization.
-
-        Behavior:
-            If an entry for the specified time_clockcycles already exists in self.updates, this function
-            will update the existing states and flags. If a state or flag is provided that already exists,
-            its value will be updated. Otherwise, new states or flags will be added to the transition.
-        '''
-        if time_clockcycles not in self.updates:
-            self.updates[time_clockcycles] = {'states': {}, 'flags': {}}
-        
-        if state_dict is not None:
-            self.updates[time_clockcycles]['states'].update(state_dict)
-
-        # Build a dictionary of flags, filtering out None values
-        flags = {key: value for key, value in {
-            "goto_address": goto_address,
-            "goto_counter": goto_counter,
-            "stop_and_wait": stop_and_wait,
-            "hardware_trig_out": hardware_trig_out,
-            "notify_computer": notify_computer,
-            "powerline_sync": powerline_sync
-        }.items() if value is not None}
-        
-        self.updates[time_clockcycles]['flags'].update(flags)
+    def channel(self, channel_number: int):
+        """
+        Retrieve or create a Channel object for the given channel.
+        """
+        if channel_number not in self.channels:
+            self.channels[channel_number] = Channel(channel_number, self)
+        return self.channels[channel_number]
 
     def compile(self):
-        '''
-        Uses the updates to generate encoded instructions ready for writing to a PulseGenerator
-        '''
+        """
+        Process the scheduled updates to generate encoded instructions.
+        """
         self.instructions = []
-        if len(self.updates) == 0:
+        if not self.updates:
             return
-        
-        # Sort transitions by clock cycle time. sorted_updates is now a list of the form [(time_clockcycles, {'states':{}, 'flags':{}}), ...]
+
+        # Sort updates by absolute time
         sorted_updates = sorted(self.updates.items())
-        
         current_state = self.starting_state.copy()
 
+        # Ensure an update exists at time 0
         if sorted_updates[0][0] != 0:
-            # The instruction at t=0 was not specified.
-            # The PulseGenerator always executes the first instruction immeadiately upon initial triggering (either software or hardware triggering), so this must be specified.
-            sorted_updates.insert(0, (0, {'states':current_state.copy(), 'flags':{}}))
+            sorted_updates.insert(0, (0, {'states': current_state.copy(), 'flags': {}}))
 
-        # The last update needs to be given a duration. Either it is inferred from self.sequence_duration or it is set to 1
+        # Calculate duration for the final update
         final_update_time = sorted_updates[-1][0]
         if self.sequence_duration is None:
             final_update_duration = 1
         else:
             final_update_duration = self.sequence_duration - final_update_time
-            assert final_update_duration >= 1
-        # appending a dummy update is the easy way to make the next bit work
-        sorted_updates.append((final_update_time + final_update_duration, {'states':{}, 'flags':{}}))
+            assert final_update_duration >= 1, "Sequence duration must extend beyond the last update"
+        
+        # Append a dummy update to determine the duration of the last segment
+        sorted_updates.append((final_update_time + final_update_duration, {'states': {}, 'flags': {}}))
 
+        # Generate instructions for each time interval
         for address, (current_update, next_update) in enumerate(zip(sorted_updates, sorted_updates[1:])):
-            current_duration = next_update[0] - current_update[0]
+            duration = next_update[0] - current_update[0]
             current_state.update(current_update[1]['states'])
+            # Create a boolean list representing channels 0 through 23
             state = [current_state[i] for i in range(24)]
+            print(current_update)
+            self.instructions.append(
+                encode_instruction(address, duration, state, **current_update[1]['flags'])
+            )
 
-            self.instructions.append(encode_instruction(address, current_duration, state, **current_update[1]['flags']))
+    def upload_instructions(self, pulse_generator: PulseGenerator) -> None:
+        """
+        Upload the compiled instructions to the hardware.
+        This is a convenience function. You can also just pass the compiled instructions 
+        to your own pulse_generator instance manually.
+        """
+        pulse_generator.write_instructions(self.instructions)
+        pulse_generator.write_device_options(final_address=len(self.instructions))
 
-    def upload_instructions(self, pulsegenerator_obj):
-        '''An extremely thin wrapper around some PulseGenerator methods to upload the instructions and final address in one call'''
-        pulsegenerator_obj.write_instructions(self.instructions)
-        pulsegenerator_obj.write_device_options(final_address=len(self.instructions) - 1)
+
+class Channel:
+    def __init__(self, channel_number: int, compiler: Compiler):
+        self.channel = channel_number
+        self.compiler = compiler
+
+    def high(self, t: int, **flags):
+        """
+        Schedule the channel to go high at the specified absolute time.
+        """
+        self.compiler.add_update(t=t, state_dict={self.channel: True}, **flags)
+
+    def low(self, t: int, **flags):
+        """
+        Schedule the channel to go low at the specified absolute time.
+        """
+        self.compiler.add_update(t=t, state_dict={self.channel: False}, **flags)
+
+    def pulse_high(self, t: int, duration_high: int, duration_low: int = 0, N: int = 1, flags_mode: str = "start", **flags) -> int:
+        """
+        Schedule a series of high pulses on the channel.
+        
+        flags_mode: start, evey, end. 
+            start: The flags are activated at the start of the first clock cycle of the first pulse
+            every: The flags are activated at the start of the first clock cycle of the every pulse
+            end: The flags are activated at the start of the last clock cycle of the last pulse
+
+        Returns:
+          The total duration consumed by the scheduled pulse sequence.
+        """
+        if N < 1:
+            return 0 # Does not do anything and the duration is 0
+        if N > 1 and duration_low <= 0:
+            raise ValueError("For N > 1, duration_low must be greater than 0.")
+
+        if flags_mode == 'start':
+            pulse_start = t
+            self.compiler.add_update(t=pulse_start, state_dict={self.channel: True}, **flags)
+            self.compiler.add_update(t=pulse_start + duration_high, state_dict={self.channel: False})
+            pulse_start += (duration_high + duration_low)
+            for i in range(N - 1):
+                # Only runs if N > 1
+                self.compiler.add_update(t=pulse_start, state_dict={self.channel: True})
+                self.compiler.add_update(t=pulse_start + duration_high, state_dict={self.channel: False})
+                pulse_start += (duration_high + duration_low)
+        elif flags_mode == 'every':
+            pulse_start = t
+            for i in range(N):
+                # Runs if N >= 1
+                self.compiler.add_update(t=pulse_start, state_dict={self.channel: True}, **flags)
+                self.compiler.add_update(t=pulse_start + duration_high, state_dict={self.channel: False})
+                pulse_start += (duration_high + duration_low)
+        elif flags_mode == 'end':
+            pulse_start = t
+            for i in range(N - 1):
+                # Only runs if N > 1
+                self.compiler.add_update(t=pulse_start, state_dict={self.channel: True})
+                self.compiler.add_update(t=pulse_start + duration_high, state_dict={self.channel: False})
+                pulse_start += (duration_high + duration_low)
+            self.compiler.add_update(t=pulse_start, state_dict={self.channel: True})
+            self.compiler.add_update(t=pulse_start + duration_high, state_dict={self.channel: False}, **flags)
+        else:
+            raise ValueError("Invalid value for flags_mode. Valid entries are \"start\", \"evey\", \"end\"")
+        
+        if N == 1:
+            total_duration = duration_high
+        else:
+            total_duration = (N - 1) * (duration_high + duration_low) + duration_high  
+        return total_duration
+
+    def pulse_low(self, t: int, duration_high: int, duration_low: int = 0, N: int = 1, flags_mode: str = "start", **flags) -> int:
+        """
+        Schedule a series of low pulses on the channel.
+        
+        flags_mode: start, evey, end. 
+            start: The flags are activated at the start of the first clock cycle of the first pulse
+            every: The flags are activated at the start of the first clock cycle of the every pulse
+            end: The flags are activated at the start of the last clock cycle of the last pulse
+
+        Returns:
+          The total duration consumed by the scheduled pulse sequence.
+        """
+        if N < 1:
+            return 0 # Does not do anything and the duration is 0
+        if N > 1 and duration_low <= 0:
+            raise ValueError("For N > 1, duration_low must be greater than 0.")
+
+        if flags_mode == 'start':
+            pulse_start = t
+            self.compiler.add_update(t=pulse_start, state_dict={self.channel: False}, **flags)
+            self.compiler.add_update(t=pulse_start + duration_high, state_dict={self.channel: True})
+            pulse_start += (duration_high + duration_low)
+            for i in range(N - 1):
+                # Only runs if N > 1
+                self.compiler.add_update(t=pulse_start, state_dict={self.channel: False})
+                self.compiler.add_update(t=pulse_start + duration_high, state_dict={self.channel: True})
+                pulse_start += (duration_high + duration_low)
+        elif flags_mode == 'every':
+            pulse_start = t
+            for i in range(N):
+                # Runs if N >= 1
+                self.compiler.add_update(t=pulse_start, state_dict={self.channel: False}, **flags)
+                self.compiler.add_update(t=pulse_start + duration_high, state_dict={self.channel: True})
+                pulse_start += (duration_high + duration_low)
+        elif flags_mode == 'end':
+            pulse_start = t
+            for i in range(N - 1):
+                # Only runs if N > 1
+                self.compiler.add_update(t=pulse_start, state_dict={self.channel: False})
+                self.compiler.add_update(t=pulse_start + duration_high, state_dict={self.channel: True})
+                pulse_start += (duration_high + duration_low)
+            self.compiler.add_update(t=pulse_start, state_dict={self.channel: False})
+            self.compiler.add_update(t=pulse_start + duration_high, state_dict={self.channel: True}, **flags)
+        else:
+            raise ValueError("Invalid value for flags_mode. Valid entries are \"start\", \"evey\", \"end\"")
+        
+        if N == 1:
+            total_duration = duration_high
+        else:
+            total_duration = (N - 1) * (duration_high + duration_low) + duration_high  
+        return total_duration

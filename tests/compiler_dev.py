@@ -9,15 +9,21 @@ import ndpulsegen
 
 def basic_compiler_test():
 
-    cplr = ndpulsegen.Compiler()
+    compiler = ndpulsegen.Compiler()
 
-    cplr.starting_state[3] = False
-    cplr.add_update(0, {0: True, 2:True})
-    cplr.add_update(7, {0: False})
-    cplr.add_update(3, notify_computer=True)
+    aom = compiler.channel(9)
 
+    compiler.starting_state[3] = False
+    compiler.add_update(0, {0: True, 2:True})
+    compiler.add_update(7, {0: False})
+    compiler.add_update(3, notify_computer=True, powerline_sync=True)
+
+    aom.high(7, hardware_trig_out=True)
+    # aom.low(8)
+    pulse_duration = aom.pulse_high(t=10, duration_high=2, duration_low = 1, N = 2, flags_mode = 'start', hardware_trig_out=True)
+    print(pulse_duration)
     # print(cplr.updates)
-    print(cplr.compile())
+    print(compiler.compile())
 
 
 if __name__ == "__main__":
@@ -27,4 +33,7 @@ if __name__ == "__main__":
     # pg.connect()
 
     basic_compiler_test()
+
+    # for a in range(-1):
+    #     print(a)
 
