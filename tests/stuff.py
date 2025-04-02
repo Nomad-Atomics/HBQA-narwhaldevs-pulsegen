@@ -1,5 +1,7 @@
 import time
-import datetime
+from datetime.date import fromtimestamp
+
+# import datetime
 
 
 N = 1000
@@ -10,7 +12,9 @@ for i in range(N):
     record.append(time.time())
 t1 = time.time()
 print(t1)
-print(str(datetime.datetime.fromtimestamp(t1)).split()[1])
+# print(str(datetime.datetime.fromtimestamp(t1)).split()[1])
+
+print(str(fromtimestamp(t1)).split()[1])
 
 
 print(f'{(t1-t0)/N*1E9}')
