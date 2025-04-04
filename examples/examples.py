@@ -1,6 +1,14 @@
 import numpy as np
-import ndpulsegen
 import time
+
+# This allows the examples to be run from the examples folder, or from the root folder
+import sys
+from pathlib import Path
+current_file_path = Path(__file__).resolve()
+sys.path.insert(0, str(current_file_path.parent.parent / 'src'))
+
+import ndpulsegen
+
 
 
 def software_trig(pg):

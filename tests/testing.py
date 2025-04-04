@@ -457,15 +457,17 @@ def run_timer_test(pg):
 
 if __name__ == "__main__":
 
-    pg = ndpulsegen.PulseGenerator()
-    print(pg.get_connected_devices())
-    # pg.connect(serial_number=12582915)
-    pg.connect(serial_number=12582917)
-    # pg2 = ndpulsegen.PulseGenerator()
-    # # print(pg.get_connected_devices())
-    # pg2.connect(serial_number=12582917)
+    ndpulsegen.gui.main()
+    
+    # pg = ndpulsegen.PulseGenerator()
+    # print(pg.get_connected_devices())
+    # # pg.connect(serial_number=12582915)
+    # pg.connect(serial_number=12582917)
+    # # pg2 = ndpulsegen.PulseGenerator()
+    # # # print(pg.get_connected_devices())
+    # # pg2.connect(serial_number=12582917)
 
-    run_timer_test(pg)
+    # run_timer_test(pg)
 
     # quick_check(pg2) 
     # quick_check(pg)
