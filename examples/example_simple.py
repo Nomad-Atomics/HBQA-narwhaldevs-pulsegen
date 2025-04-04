@@ -1,3 +1,10 @@
+# This allows the examples to be run from the examples folder, or from the root folder
+# Uncomment the following lines if you want to run the example from the examples folder
+# import sys
+# from pathlib import Path
+# current_file_path = Path(__file__).resolve()
+# sys.path.insert(0, str(current_file_path.parent.parent / 'src'))
+
 import ndpulsegen
 import numpy as np
 
