@@ -25,6 +25,21 @@ def basic_compiler_test():
     # print(cplr.updates)
     print(compiler.compile())
 
+def goto_compiler_test():
+
+    compiler = ndpulsegen.Compiler()
+
+    compiler.starting_state[3] = False
+    compiler.add_update(0, {0: True, 2:True})
+    compiler.add_update(3, {0: True, 2:True})
+    compiler.add_update(10, {0: True, 2:True})
+    compiler.add_update(15, {0: False})
+ 
+    compiler.add_goto(t_from=7, t_to=4, goto_counter=7)
+
+
+    print(compiler.compile())
+
 
 if __name__ == "__main__":
 
@@ -32,7 +47,8 @@ if __name__ == "__main__":
     # print(pg.get_connected_devices())
     # pg.connect()
 
-    basic_compiler_test()
+    # basic_compiler_test()
+    goto_compiler_test()
 
     # for a in range(-1):
     #     print(a)

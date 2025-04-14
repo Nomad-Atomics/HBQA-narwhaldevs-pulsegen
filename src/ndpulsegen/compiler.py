@@ -13,16 +13,45 @@ class Compiler:
         """Update the starting state for multiple channels."""
         self.starting_state.update(state_dict)
 
+    # def add_update(self, t: int, state_dict: dict = None, **flags):
+    #     """
+    #     Schedule an update at time 't'. This method requires an absolute time.
+    #     """
+    #     if t not in self.updates:
+    #         self.updates[t] = {'states': {}, 'flags': {}}
+    #     if state_dict:
+    #         self.updates[t]['states'].update(state_dict)
+    #     if flags:
+    #         self.updates[t]['flags'].update(flags)
+
     def add_update(self, t: int, state_dict: dict = None, **flags):
         """
         Schedule an update at time 't'. This method requires an absolute time.
         """
         if t not in self.updates:
-            self.updates[t] = {'states': {}, 'flags': {}}
+            self.updates[t] = {'states': {}, 'goto': {}, 'flags': {}}
         if state_dict:
             self.updates[t]['states'].update(state_dict)
         if flags:
             self.updates[t]['flags'].update(flags)
+
+    def add_goto(self, t_from: int, t_to: int, goto_counter: int, **flags):
+        """
+        Schedule a goto instruction at time 't_from' to jump to 't_to'.
+        Since the goto happens at the end of the clock cycle, it is scheduled to an instruction at
+        clock cycle t_from - 1.
+        
+        I now have empty states and flags, I think this is ok.
+        """
+        if t_from - 1 not in self.updates:
+            self.updates[t_from - 1] = {'states': {}, 'goto': {'t_to':t_to, 'counter':goto_counter}, 'flags': {}}
+        else:
+            self.updates[t_from - 1]['goto'].update({'t_to':t_to, 'counter':goto_counter})
+
+        # I have to ensure there is some update at the t_to time, so that the compiler can ensure there 
+        # will be an instruction there to jump to. But I don't need to add anything to it.
+        if t_to not in self.updates:
+            self.updates[t_to] = {'states': {}, 'goto': {}, 'flags': {}}
 
     def channel(self, channel_number: int):
         """
@@ -35,6 +64,7 @@ class Compiler:
     def compile(self):
         """
         Process the scheduled updates to generate encoded instructions.
+        This version also handels goto's
         """
         self.instructions = []
         if not self.updates:
@@ -57,7 +87,12 @@ class Compiler:
             assert final_update_duration >= 1, "Sequence duration must extend beyond the last update"
         
         # Append a dummy update to determine the duration of the last segment
-        sorted_updates.append((final_update_time + final_update_duration, {'states': {}, 'flags': {}}))
+        sorted_updates.append((final_update_time + final_update_duration, {'states': {}, 'goto': {}, 'flags': {}}))
+
+        # generate a mapping from time to address, so that I can quickly look up the address for a given t_to
+        time_to_address = {}
+        for address, update in enumerate(sorted_updates):
+            time_to_address[update[0]] = address
 
         # Generate instructions for each time interval
         for address, (current_update, next_update) in enumerate(zip(sorted_updates, sorted_updates[1:])):
@@ -65,10 +100,49 @@ class Compiler:
             current_state.update(current_update[1]['states'])
             # Create a boolean list representing channels 0 through 23
             state = [current_state[i] for i in range(24)]
-            print(current_update)
+            t_to = current_update[1]['goto'].get('t_to', 0)
+            print(address, duration, time_to_address[t_to], current_update[1]['goto'].get('counter', 0), **current_update[1]['flags'])
             self.instructions.append(
-                encode_instruction(address, duration, state, **current_update[1]['flags'])
+                encode_instruction(address, duration, state, time_to_address[t_to], current_update[1]['goto'].get('counter', 0), **current_update[1]['flags'])
             )
+
+    # def compile(self):
+    #     """
+    #     Process the scheduled updates to generate encoded instructions.
+    #     """
+    #     self.instructions = []
+    #     if not self.updates:
+    #         return
+
+    #     # Sort updates by absolute time
+    #     sorted_updates = sorted(self.updates.items())
+    #     current_state = self.starting_state.copy()
+
+    #     # Ensure an update exists at time 0
+    #     if sorted_updates[0][0] != 0:
+    #         sorted_updates.insert(0, (0, {'states': current_state.copy(), 'flags': {}}))
+
+    #     # Calculate duration for the final update
+    #     final_update_time = sorted_updates[-1][0]
+    #     if self.sequence_duration is None:
+    #         final_update_duration = 1
+    #     else:
+    #         final_update_duration = self.sequence_duration - final_update_time
+    #         assert final_update_duration >= 1, "Sequence duration must extend beyond the last update"
+        
+    #     # Append a dummy update to determine the duration of the last segment
+    #     sorted_updates.append((final_update_time + final_update_duration, {'states': {}, 'flags': {}}))
+
+    #     # Generate instructions for each time interval
+    #     for address, (current_update, next_update) in enumerate(zip(sorted_updates, sorted_updates[1:])):
+    #         duration = next_update[0] - current_update[0]
+    #         current_state.update(current_update[1]['states'])
+    #         # Create a boolean list representing channels 0 through 23
+    #         state = [current_state[i] for i in range(24)]
+    #         print(current_update)
+    #         self.instructions.append(
+    #             encode_instruction(address, duration, state, **current_update[1]['flags'])
+    #         )
 
     def upload_instructions(self, pulse_generator: PulseGenerator) -> None:
         """
