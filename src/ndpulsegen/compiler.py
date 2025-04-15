@@ -13,29 +13,38 @@ class Compiler:
         """Update the starting state for multiple channels."""
         self.starting_state.update(state_dict)
 
-    # def add_update(self, t: int, state_dict: dict = None, **flags):
-    #     """
-    #     Schedule an update at time 't'. This method requires an absolute time.
-    #     """
-    #     if t not in self.updates:
-    #         self.updates[t] = {'states': {}, 'flags': {}}
-    #     if state_dict:
-    #         self.updates[t]['states'].update(state_dict)
-    #     if flags:
-    #         self.updates[t]['flags'].update(flags)
-
-    def add_update(self, t: int, state_dict: dict = None, **flags):
+    def add_update(self, t: int,
+                state_dict: dict = None,
+                stop_and_wait=None,
+                hardware_trig_out=None,
+                notify_computer=None,
+                powerline_sync=None):
         """
         Schedule an update at time 't'. This method requires an absolute time.
+        
+        Parameters:
+            t (int): The time at which to schedule the update.
+            state_dict (dict, optional): Dictionary to update 'states'.
+            stop_and_wait (optional): Value for the 'stop_and_wait' flag.
+            hardware_trig_out (optional): Value for the 'hardware_trig_out' flag.
+            notify_computer (optional): Value for the 'notify_computer' flag.
+            powerline_sync (optional): Value for the 'powerline_sync' flag.
         """
+        # Create the update structure if it doesn't exist
         if t not in self.updates:
             self.updates[t] = {'states': {}, 'goto': {}, 'flags': {}}
+
+        # Update the 'states' section if a state_dict is provided
         if state_dict:
             self.updates[t]['states'].update(state_dict)
+
+        # Update the flags dict only for non None values
+        flags_update = {'stop_and_wait':stop_and_wait, 'hardware_trig_out':hardware_trig_out, 'notify_computer':notify_computer, 'powerline_sync':powerline_sync}
+        flags = {key: value for key, value in flags_update.items() if value is not None}
         if flags:
             self.updates[t]['flags'].update(flags)
 
-    def add_goto(self, t_from: int, t_to: int, goto_counter: int, **flags):
+    def add_goto(self, t_from: int, t_to: int, goto_counter: int):
         """
         Schedule a goto instruction at time 't_from' to jump to 't_to'.
         Since the goto happens at the end of the clock cycle, it is scheduled to an instruction at
@@ -76,7 +85,7 @@ class Compiler:
 
         # Ensure an update exists at time 0
         if sorted_updates[0][0] != 0:
-            sorted_updates.insert(0, (0, {'states': current_state.copy(), 'flags': {}}))
+            sorted_updates.insert(0, (0, {'states': current_state.copy(), 'goto': {}, 'flags': {}}))
 
         # Calculate duration for the final update
         final_update_time = sorted_updates[-1][0]
@@ -90,9 +99,7 @@ class Compiler:
         sorted_updates.append((final_update_time + final_update_duration, {'states': {}, 'goto': {}, 'flags': {}}))
 
         # generate a mapping from time to address, so that I can quickly look up the address for a given t_to
-        time_to_address = {}
-        for address, update in enumerate(sorted_updates):
-            time_to_address[update[0]] = address
+        time_to_address_lookup = {time: idx for idx, (time, _) in enumerate(sorted_updates)}
 
         # Generate instructions for each time interval
         for address, (current_update, next_update) in enumerate(zip(sorted_updates, sorted_updates[1:])):
@@ -100,49 +107,15 @@ class Compiler:
             current_state.update(current_update[1]['states'])
             # Create a boolean list representing channels 0 through 23
             state = [current_state[i] for i in range(24)]
+            # Get the goto_time is it exists. Otherwise make it 0.
+            print(current_update)
             t_to = current_update[1]['goto'].get('t_to', 0)
-            print(address, duration, time_to_address[t_to], current_update[1]['goto'].get('counter', 0), **current_update[1]['flags'])
+            # Encode the instruction. 
+            # Use the address of the instruction at time t_to instruction. And use the goto counter if it exists, otherwise 0.
             self.instructions.append(
-                encode_instruction(address, duration, state, time_to_address[t_to], current_update[1]['goto'].get('counter', 0), **current_update[1]['flags'])
+                encode_instruction(address, duration, state, time_to_address_lookup[t_to], current_update[1]['goto'].get('counter', 0), **current_update[1]['flags'])
             )
-
-    # def compile(self):
-    #     """
-    #     Process the scheduled updates to generate encoded instructions.
-    #     """
-    #     self.instructions = []
-    #     if not self.updates:
-    #         return
-
-    #     # Sort updates by absolute time
-    #     sorted_updates = sorted(self.updates.items())
-    #     current_state = self.starting_state.copy()
-
-    #     # Ensure an update exists at time 0
-    #     if sorted_updates[0][0] != 0:
-    #         sorted_updates.insert(0, (0, {'states': current_state.copy(), 'flags': {}}))
-
-    #     # Calculate duration for the final update
-    #     final_update_time = sorted_updates[-1][0]
-    #     if self.sequence_duration is None:
-    #         final_update_duration = 1
-    #     else:
-    #         final_update_duration = self.sequence_duration - final_update_time
-    #         assert final_update_duration >= 1, "Sequence duration must extend beyond the last update"
-        
-    #     # Append a dummy update to determine the duration of the last segment
-    #     sorted_updates.append((final_update_time + final_update_duration, {'states': {}, 'flags': {}}))
-
-    #     # Generate instructions for each time interval
-    #     for address, (current_update, next_update) in enumerate(zip(sorted_updates, sorted_updates[1:])):
-    #         duration = next_update[0] - current_update[0]
-    #         current_state.update(current_update[1]['states'])
-    #         # Create a boolean list representing channels 0 through 23
-    #         state = [current_state[i] for i in range(24)]
-    #         print(current_update)
-    #         self.instructions.append(
-    #             encode_instruction(address, duration, state, **current_update[1]['flags'])
-    #         )
+        return self.instructions
 
     def upload_instructions(self, pulse_generator: PulseGenerator) -> None:
         """
@@ -159,19 +132,19 @@ class Channel:
         self.channel = channel_number
         self.compiler = compiler
 
-    def high(self, t: int, **flags):
+    def high(self, t: int, stop_and_wait=None, hardware_trig_out=None, notify_computer=None, powerline_sync=None):
         """
         Schedule the channel to go high at the specified absolute time.
         """
-        self.compiler.add_update(t=t, state_dict={self.channel: True}, **flags)
+        self.compiler.add_update(t, {self.channel: True}, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync)
 
-    def low(self, t: int, **flags):
+    def low(self, t: int, stop_and_wait=None, hardware_trig_out=None, notify_computer=None, powerline_sync=None):
         """
         Schedule the channel to go low at the specified absolute time.
         """
-        self.compiler.add_update(t=t, state_dict={self.channel: False}, **flags)
+        self.compiler.add_update(t, {self.channel: False}, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync)
 
-    def pulse_high(self, t: int, duration_high: int, duration_low: int = 0, N: int = 1, flags_mode: str = "start", **flags) -> int:
+    def pulse_high(self, t: int, duration_high: int, duration_low: int = 0, N: int = 1, flags_mode: str = "start", stop_and_wait=None, hardware_trig_out=None, notify_computer=None, powerline_sync=None) -> int:
         """
         Schedule a series of high pulses on the channel.
         
@@ -183,47 +156,9 @@ class Channel:
         Returns:
           The total duration consumed by the scheduled pulse sequence.
         """
-        if N < 1:
-            return 0 # Does not do anything and the duration is 0
-        if N > 1 and duration_low <= 0:
-            raise ValueError("For N > 1, duration_low must be greater than 0.")
+        return self._pulse(True, t, duration_high, duration_low, N, flags_mode, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync)
 
-        if flags_mode == 'start':
-            pulse_start = t
-            self.compiler.add_update(t=pulse_start, state_dict={self.channel: True}, **flags)
-            self.compiler.add_update(t=pulse_start + duration_high, state_dict={self.channel: False})
-            pulse_start += (duration_high + duration_low)
-            for i in range(N - 1):
-                # Only runs if N > 1
-                self.compiler.add_update(t=pulse_start, state_dict={self.channel: True})
-                self.compiler.add_update(t=pulse_start + duration_high, state_dict={self.channel: False})
-                pulse_start += (duration_high + duration_low)
-        elif flags_mode == 'every':
-            pulse_start = t
-            for i in range(N):
-                # Runs if N >= 1
-                self.compiler.add_update(t=pulse_start, state_dict={self.channel: True}, **flags)
-                self.compiler.add_update(t=pulse_start + duration_high, state_dict={self.channel: False})
-                pulse_start += (duration_high + duration_low)
-        elif flags_mode == 'end':
-            pulse_start = t
-            for i in range(N - 1):
-                # Only runs if N > 1
-                self.compiler.add_update(t=pulse_start, state_dict={self.channel: True})
-                self.compiler.add_update(t=pulse_start + duration_high, state_dict={self.channel: False})
-                pulse_start += (duration_high + duration_low)
-            self.compiler.add_update(t=pulse_start, state_dict={self.channel: True})
-            self.compiler.add_update(t=pulse_start + duration_high, state_dict={self.channel: False}, **flags)
-        else:
-            raise ValueError("Invalid value for flags_mode. Valid entries are \"start\", \"evey\", \"end\"")
-        
-        if N == 1:
-            total_duration = duration_high
-        else:
-            total_duration = (N - 1) * (duration_high + duration_low) + duration_high  
-        return total_duration
-
-    def pulse_low(self, t: int, duration_high: int, duration_low: int = 0, N: int = 1, flags_mode: str = "start", **flags) -> int:
+    def pulse_low(self, t: int, duration_low: int, duration_high: int = 0, N: int = 1, flags_mode: str = "start", stop_and_wait=None, hardware_trig_out=None, notify_computer=None, powerline_sync=None) -> int:
         """
         Schedule a series of low pulses on the channel.
         
@@ -235,42 +170,65 @@ class Channel:
         Returns:
           The total duration consumed by the scheduled pulse sequence.
         """
+        return self._pulse(False, t, duration_low, duration_high, N, flags_mode, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync)
+
+    def _pulse(self, first_segment_high: bool, t: int, duration_first_segment: int, duration_second_segment: int = 0, N: int = 1, flags_mode: str = "start", stop_and_wait=None, hardware_trig_out=None, notify_computer=None, powerline_sync=None) -> int:
+        """
+        Schedule a series of high pulses on the channel.
+        
+        flags_mode: start, evey, end. 
+            start: The flags are activated at the start of the first clock cycle of the first pulse
+            every: The flags are activated at the start of the first clock cycle of the every pulse
+            end: The flags are activated at the start of the last clock cycle of the last pulse
+
+        Returns:
+          The total duration consumed by the scheduled pulse sequence.
+        """
+
+        if first_segment_high:
+            first_segment_level = True
+            second_segment_level = False
+        else:
+            first_segment_level = False
+            second_segment_level = True
+    
         if N < 1:
             return 0 # Does not do anything and the duration is 0
-        if N > 1 and duration_low <= 0:
+        if N > 1 and duration_second_segment <= 0:
             raise ValueError("For N > 1, duration_low must be greater than 0.")
 
         if flags_mode == 'start':
             pulse_start = t
-            self.compiler.add_update(t=pulse_start, state_dict={self.channel: False}, **flags)
-            self.compiler.add_update(t=pulse_start + duration_high, state_dict={self.channel: True})
-            pulse_start += (duration_high + duration_low)
+            self.compiler.add_update(pulse_start, {self.channel: first_segment_level}, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync)
+            self.compiler.add_update(pulse_start + duration_first_segment, {self.channel: second_segment_level})
+            pulse_start += (duration_first_segment + duration_second_segment)
             for i in range(N - 1):
                 # Only runs if N > 1
-                self.compiler.add_update(t=pulse_start, state_dict={self.channel: False})
-                self.compiler.add_update(t=pulse_start + duration_high, state_dict={self.channel: True})
-                pulse_start += (duration_high + duration_low)
+                self.compiler.add_update(pulse_start, {self.channel: first_segment_level})
+                self.compiler.add_update(pulse_start + duration_first_segment, {self.channel: second_segment_level})
+                pulse_start += (duration_first_segment + duration_second_segment)
         elif flags_mode == 'every':
             pulse_start = t
             for i in range(N):
                 # Runs if N >= 1
-                self.compiler.add_update(t=pulse_start, state_dict={self.channel: False}, **flags)
-                self.compiler.add_update(t=pulse_start + duration_high, state_dict={self.channel: True})
-                pulse_start += (duration_high + duration_low)
+                self.compiler.add_update(pulse_start, {self.channel: first_segment_level}, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync)
+                self.compiler.add_update(pulse_start + duration_first_segment, {self.channel: second_segment_level})
+                pulse_start += (duration_first_segment + duration_second_segment)
         elif flags_mode == 'end':
             pulse_start = t
             for i in range(N - 1):
                 # Only runs if N > 1
-                self.compiler.add_update(t=pulse_start, state_dict={self.channel: False})
-                self.compiler.add_update(t=pulse_start + duration_high, state_dict={self.channel: True})
-                pulse_start += (duration_high + duration_low)
-            self.compiler.add_update(t=pulse_start, state_dict={self.channel: False})
-            self.compiler.add_update(t=pulse_start + duration_high, state_dict={self.channel: True}, **flags)
+                self.compiler.add_update(pulse_start, {self.channel: first_segment_level})
+                self.compiler.add_update(pulse_start + duration_first_segment, {self.channel: second_segment_level})
+                pulse_start += (duration_first_segment + duration_second_segment)
+            self.compiler.add_update(pulse_start, {self.channel: first_segment_level})
+            self.compiler.add_update(pulse_start + duration_first_segment, {self.channel: second_segment_level}, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync)
         else:
             raise ValueError("Invalid value for flags_mode. Valid entries are \"start\", \"evey\", \"end\"")
         
         if N == 1:
-            total_duration = duration_high
+            total_duration = duration_first_segment
         else:
-            total_duration = (N - 1) * (duration_high + duration_low) + duration_high  
+            total_duration = (N - 1) * (duration_first_segment + duration_second_segment) + duration_first_segment  
         return total_duration
+
