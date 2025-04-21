@@ -16,13 +16,40 @@ def basic_compiler_test():
     compiler.starting_state[3] = False
     # compiler.add_update(0, {0: True, 2:True})
     # compiler.add_update(7, {0: False})
-    compiler.add_update(3, notify_computer=True, powerline_sync=True)
+    compiler.add_update(3, notify_computer=True, powerline_sync=True, time_unit='clock_cycles')
 
-    aom.high(7, hardware_trig_out=True)
+    aom.high(7, hardware_trig_out=True, time_unit='clock_cycles')
     # aom.low(8)
     # pulse_duration = aom.pulse_high(t=10, duration_high=2, duration_low = 3, N = 2, flags_mode = 'start', hardware_trig_out=True)
     # pulse_duration = aom.pulse_low(t=10, duration_low=2, duration_high = 3, N = 2, flags_mode = 'start', hardware_trig_out=True)
-    pulse_duration = aom.pulse_low(10, 5)
+    pulse_duration = aom.pulse_low(10, 5, time_unit='clock_cycles')
+
+    # print(pulse_duration)
+    # print(cplr.updates)
+    compiler.compile()
+
+def basic_compiler_test_time_units():
+
+    time_unit = 'seconds'
+    # time_multiplier = 10e-9
+
+    # time_unit = 'clock_cycles'
+    time_multiplier = 1
+
+    compiler = ndpulsegen.Compiler()
+
+    aom = compiler.channel(9)
+
+    compiler.starting_state[3] = False
+    compiler.add_update(0*time_multiplier, {0: True, 2:True}, time_unit=time_unit)
+    # compiler.add_update(7*time_multiplier, {0: False}, time_unit=time_unit)
+    compiler.add_update(3*time_multiplier, notify_computer=True, powerline_sync=True, time_unit=time_unit)
+
+    aom.high(7*time_multiplier, hardware_trig_out=True, time_unit=time_unit)
+    # aom.low(8)
+    pulse_duration = aom.pulse_high(t=10*time_multiplier, duration_high=2*time_multiplier, duration_low = 3*time_multiplier, N = 2, flags_mode = 'start', hardware_trig_out=True, time_unit=time_unit)
+    # pulse_duration = aom.pulse_low(t=10*time_multiplier, duration_low=2*time_multiplier, duration_high = 3*time_multiplier, N = 2, flags_mode = 'start', hardware_trig_out=True, time_unit=time_unit)
+    # pulse_duration = aom.pulse_low(10*time_multiplier, 5*time_multiplier, time_unit=time_unit)
 
     # print(pulse_duration)
     # print(cplr.updates)
@@ -51,7 +78,8 @@ if __name__ == "__main__":
     # print(pg.get_connected_devices())
     # pg.connect()
 
-    basic_compiler_test()
+    basic_compiler_test_time_units()
+    # basic_compiler_test() 
     # goto_compiler_test()
 
     # for a in range(-1):

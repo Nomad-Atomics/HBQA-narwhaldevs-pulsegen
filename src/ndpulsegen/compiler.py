@@ -2,6 +2,8 @@ from .transcode import encode_instruction
 from .comms import PulseGenerator
 
 class Compiler:
+    CLOCK_PERIOD = 10e-9
+
     def __init__(self):
         self.updates = {}  # Dictionary keyed by absolute time; each entry is {'states': {}, 'flags': {}}
         self.starting_state = {i: False for i in range(24)}
@@ -13,23 +15,30 @@ class Compiler:
         """Update the starting state for multiple channels."""
         self.starting_state.update(state_dict)
 
-    def add_update(self, t: int,
+    def add_update(self, t: float,
                 state_dict: dict = None,
                 stop_and_wait=None,
                 hardware_trig_out=None,
                 notify_computer=None,
-                powerline_sync=None):
+                powerline_sync=None,
+                time_unit='seconds'):
         """
         Schedule an update at time 't'. This method requires an absolute time.
         
         Parameters:
-            t (int): The time at which to schedule the update.
+            t (float or int): The time at which to schedule the update.
             state_dict (dict, optional): Dictionary to update 'states'.
             stop_and_wait (optional): Value for the 'stop_and_wait' flag.
             hardware_trig_out (optional): Value for the 'hardware_trig_out' flag.
             notify_computer (optional): Value for the 'notify_computer' flag.
             powerline_sync (optional): Value for the 'powerline_sync' flag.
         """
+        # convert time to clock cycles if not already done so
+        if time_unit == 'seconds':
+            t = int(round(t/Compiler.CLOCK_PERIOD))
+        else:
+            t = int(t)
+
         # Create the update structure if it doesn't exist
         if t not in self.updates:
             self.updates[t] = {'states': {}, 'goto': {}, 'flags': {}}
@@ -44,7 +53,7 @@ class Compiler:
         if flags:
             self.updates[t]['flags'].update(flags)
 
-    def add_goto(self, t_from: int, t_to: int, goto_counter: int):
+    def add_goto(self, t_from: float, t_to: float, goto_counter: int, time_unit='seconds'):
         """
         Schedule a goto instruction at time 't_from' to jump to 't_to'.
         Since the goto happens at the end of the clock cycle, it is scheduled to an instruction at
@@ -52,6 +61,13 @@ class Compiler:
         
         I now have empty states and flags, I think this is ok.
         """
+        if time_unit == 'seconds':
+            t_from = int(round(t_from/Compiler.CLOCK_PERIOD))
+            t_to = int(round(t_to/Compiler.CLOCK_PERIOD))
+        else:
+            t_from = int(t_from)
+            t_to = int(t_to)
+        
         if t_from - 1 not in self.updates:
             self.updates[t_from - 1] = {'states': {}, 'goto': {'t_to':t_to, 'counter':goto_counter}, 'flags': {}}
         else:
@@ -132,19 +148,19 @@ class Channel:
         self.channel = channel_number
         self.compiler = compiler
 
-    def high(self, t: int, stop_and_wait=None, hardware_trig_out=None, notify_computer=None, powerline_sync=None):
+    def high(self, t: float, stop_and_wait=None, hardware_trig_out=None, notify_computer=None, powerline_sync=None, time_unit='seconds'):
         """
         Schedule the channel to go high at the specified absolute time.
         """
-        self.compiler.add_update(t, {self.channel: True}, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync)
+        self.compiler.add_update(t, {self.channel: True}, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync, time_unit)
 
-    def low(self, t: int, stop_and_wait=None, hardware_trig_out=None, notify_computer=None, powerline_sync=None):
+    def low(self, t: float, stop_and_wait=None, hardware_trig_out=None, notify_computer=None, powerline_sync=None, time_unit='seconds'):
         """
         Schedule the channel to go low at the specified absolute time.
         """
-        self.compiler.add_update(t, {self.channel: False}, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync)
+        self.compiler.add_update(t, {self.channel: False}, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync, time_unit)
 
-    def pulse_high(self, t: int, duration_high: int, duration_low: int = 0, N: int = 1, flags_mode: str = "start", stop_and_wait=None, hardware_trig_out=None, notify_computer=None, powerline_sync=None) -> int:
+    def pulse_high(self, t: float, duration_high: int, duration_low: int = 0, N: int = 1, flags_mode: str = "start", stop_and_wait=None, hardware_trig_out=None, notify_computer=None, powerline_sync=None, time_unit='seconds') -> float:
         """
         Schedule a series of high pulses on the channel.
         
@@ -156,9 +172,9 @@ class Channel:
         Returns:
           The total duration consumed by the scheduled pulse sequence.
         """
-        return self._pulse(True, t, duration_high, duration_low, N, flags_mode, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync)
+        return self._pulse(True, t, duration_high, duration_low, N, flags_mode, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync, time_unit)
 
-    def pulse_low(self, t: int, duration_low: int, duration_high: int = 0, N: int = 1, flags_mode: str = "start", stop_and_wait=None, hardware_trig_out=None, notify_computer=None, powerline_sync=None) -> int:
+    def pulse_low(self, t: float, duration_low: int, duration_high: int = 0, N: int = 1, flags_mode: str = "start", stop_and_wait=None, hardware_trig_out=None, notify_computer=None, powerline_sync=None, time_unit='seconds') -> float:
         """
         Schedule a series of low pulses on the channel.
         
@@ -170,9 +186,9 @@ class Channel:
         Returns:
           The total duration consumed by the scheduled pulse sequence.
         """
-        return self._pulse(False, t, duration_low, duration_high, N, flags_mode, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync)
+        return self._pulse(False, t, duration_low, duration_high, N, flags_mode, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync, time_unit)
 
-    def _pulse(self, first_segment_high: bool, t: int, duration_first_segment: int, duration_second_segment: int = 0, N: int = 1, flags_mode: str = "start", stop_and_wait=None, hardware_trig_out=None, notify_computer=None, powerline_sync=None) -> int:
+    def _pulse(self, first_segment_high: bool, t: float, duration_first_segment: float, duration_second_segment: float = 0, N: int = 1, flags_mode: str = "start", stop_and_wait=None, hardware_trig_out=None, notify_computer=None, powerline_sync=None, time_unit='seconds'):
         """
         Schedule a series of high pulses on the channel.
         
@@ -184,6 +200,17 @@ class Channel:
         Returns:
           The total duration consumed by the scheduled pulse sequence.
         """
+
+        # Do the conversion to clock_cycles here so it only has to be done once. Not evey call to add_update.
+        time_unit_returned = time_unit
+        if time_unit == 'seconds':
+            t = int(round(t/Compiler.CLOCK_PERIOD))
+            duration_first_segment = int(round(duration_first_segment/Compiler.CLOCK_PERIOD))
+            duration_second_segment = int(round(duration_second_segment/Compiler.CLOCK_PERIOD))
+        else:
+            t = int(t)
+            duration_first_segment = int(duration_first_segment)
+            duration_second_segment = int(duration_second_segment)
 
         if first_segment_high:
             first_segment_level = True
@@ -199,30 +226,30 @@ class Channel:
 
         if flags_mode == 'start':
             pulse_start = t
-            self.compiler.add_update(pulse_start, {self.channel: first_segment_level}, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync)
-            self.compiler.add_update(pulse_start + duration_first_segment, {self.channel: second_segment_level})
+            self.compiler.add_update(pulse_start, {self.channel: first_segment_level}, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync, time_unit='clock_cycles')
+            self.compiler.add_update(pulse_start + duration_first_segment, {self.channel: second_segment_level}, time_unit='clock_cycles')
             pulse_start += (duration_first_segment + duration_second_segment)
             for i in range(N - 1):
                 # Only runs if N > 1
-                self.compiler.add_update(pulse_start, {self.channel: first_segment_level})
-                self.compiler.add_update(pulse_start + duration_first_segment, {self.channel: second_segment_level})
+                self.compiler.add_update(pulse_start, {self.channel: first_segment_level}, time_unit='clock_cycles')
+                self.compiler.add_update(pulse_start + duration_first_segment, {self.channel: second_segment_level}, time_unit='clock_cycles')
                 pulse_start += (duration_first_segment + duration_second_segment)
         elif flags_mode == 'every':
             pulse_start = t
             for i in range(N):
                 # Runs if N >= 1
-                self.compiler.add_update(pulse_start, {self.channel: first_segment_level}, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync)
-                self.compiler.add_update(pulse_start + duration_first_segment, {self.channel: second_segment_level})
+                self.compiler.add_update(pulse_start, {self.channel: first_segment_level}, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync, time_unit='clock_cycles')
+                self.compiler.add_update(pulse_start + duration_first_segment, {self.channel: second_segment_level}, time_unit='clock_cycles')
                 pulse_start += (duration_first_segment + duration_second_segment)
         elif flags_mode == 'end':
             pulse_start = t
             for i in range(N - 1):
                 # Only runs if N > 1
-                self.compiler.add_update(pulse_start, {self.channel: first_segment_level})
-                self.compiler.add_update(pulse_start + duration_first_segment, {self.channel: second_segment_level})
+                self.compiler.add_update(pulse_start, {self.channel: first_segment_level}, time_unit='clock_cycles')
+                self.compiler.add_update(pulse_start + duration_first_segment, {self.channel: second_segment_level}, time_unit='clock_cycles')
                 pulse_start += (duration_first_segment + duration_second_segment)
             self.compiler.add_update(pulse_start, {self.channel: first_segment_level})
-            self.compiler.add_update(pulse_start + duration_first_segment, {self.channel: second_segment_level}, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync)
+            self.compiler.add_update(pulse_start + duration_first_segment, {self.channel: second_segment_level}, stop_and_wait, hardware_trig_out, notify_computer, powerline_sync, time_unit='clock_cycles')
         else:
             raise ValueError("Invalid value for flags_mode. Valid entries are \"start\", \"evey\", \"end\"")
         
@@ -230,5 +257,8 @@ class Channel:
             total_duration = duration_first_segment
         else:
             total_duration = (N - 1) * (duration_first_segment + duration_second_segment) + duration_first_segment  
+        
+        if time_unit_returned == 'seconds':
+            total_duration *= Compiler.CLOCK_PERIOD
         return total_duration
 
