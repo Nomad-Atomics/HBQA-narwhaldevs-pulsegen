@@ -5,7 +5,7 @@ class Compiler:
     CLOCK_PERIOD = 10e-9
 
     def __init__(self):
-        self.updates = {}  # Dictionary keyed by absolute time; each entry is {'states': {}, 'flags': {}}
+        self.updates = {}  # Dictionary keyed by absolute time; each entry is {'states': {}, 'goto': {}, 'flags': {}}
         self.starting_state = {i: False for i in range(24)}
         self.instructions = []
         self.channels = {}  # Cache for Channel objects
