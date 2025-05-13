@@ -1,26 +1,28 @@
 import sys
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QPushButton, QComboBox, QTextEdit, QLabel, QAction, QToolBar, QScrollArea
+    QApplication, QMainWindow, QWidget,
+    QVBoxLayout, QGridLayout, QHBoxLayout,
+    QPushButton, QComboBox, QLabel,
+    QAction, QToolBar, QGroupBox, QCheckBox,
+    QTextEdit, QDoubleSpinBox
 )
 from PyQt5.QtCore import QTimer
 from serial.serialutil import PortNotOpenError
 
-# Relative imports from within the package.
+# Relative imports from within the package
 from .comms import PulseGenerator
-from .transcode import encode_instruction  # Exposed for end users if needed
+from .transcode import encode_instruction  # If needed
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Digital Signal Generator GUI")
-        # Create an instance of PulseGenerator.
         self.pg = PulseGenerator()
         self.init_ui()
         self.setup_timer()
 
     def init_ui(self):
-        # Toolbar actions.
+        # --- Toolbar & device selection ---
         checkDevicesAction = QAction("Check Devices", self)
         checkDevicesAction.triggered.connect(self.check_devices)
         connectAction = QAction("Connect", self)
@@ -29,86 +31,187 @@ class MainWindow(QMainWindow):
         disconnectAction.triggered.connect(self.disconnect_device)
 
         toolbar = QToolBar("Main Toolbar")
-        toolbar.addAction(checkDevicesAction)
-        toolbar.addAction(connectAction)
-        toolbar.addAction(disconnectAction)
+        for act in (checkDevicesAction, connectAction, disconnectAction):
+            toolbar.addAction(act)
         self.addToolBar(toolbar)
 
-        # Device selection combo box.
         self.deviceComboBox = QComboBox()
 
-        # Create a grid layout with 24 toggle buttons.
+        # --- Channel toggle buttons (top) ---
         self.outputButtons = []
-        grid = QGridLayout()
+        buttonsLayout = QGridLayout()
         for i in range(24):
             btn = QPushButton(str(i))
             btn.setCheckable(True)
             btn.clicked.connect(self.make_toggle_handler(i))
             self.outputButtons.append(btn)
-            row = i // 6  # 6 buttons per row.
-            col = i % 6
-            grid.addWidget(btn, row, col)
+            row, col = divmod(i, 8)
+            buttonsLayout.addWidget(btn, row, col)
 
-        # Create text areas for different message types.
-        # Device Info (Echo): Overwritten on each update.
-        self.deviceInfoTextEdit = QTextEdit()
-        self.deviceInfoTextEdit.setReadOnly(True)
-        # Device State.
-        self.deviceStateTextEdit = QTextEdit()
-        self.deviceStateTextEdit.setReadOnly(True)
-        # Powerline State.
-        self.powerlineStateTextEdit = QTextEdit()
-        self.powerlineStateTextEdit.setReadOnly(True)
-        # Extras.
-        self.extrasTextEdit = QTextEdit()
-        self.extrasTextEdit.setReadOnly(True)
-        # Notifications.
-        self.notificationsTextEdit = QTextEdit()
-        self.notificationsTextEdit.setReadOnly(True)
-        # Print messages.
-        self.printTextEdit = QTextEdit()
-        self.printTextEdit.setReadOnly(True)
-        # Errors.
-        self.errorLogTextEdit = QTextEdit()
-        self.errorLogTextEdit.setReadOnly(True)
+        topLayout = QVBoxLayout()
+        topLayout.addWidget(self.deviceComboBox)
+        topLayout.addLayout(buttonsLayout)
 
-        # Layout for message displays with labels.
-        messageLayout = QVBoxLayout()
-        messageLayout.addWidget(QLabel("Device Info (Echo)"))
-        messageLayout.addWidget(self.deviceInfoTextEdit)
-        messageLayout.addWidget(QLabel("Device State"))
-        messageLayout.addWidget(self.deviceStateTextEdit)
-        messageLayout.addWidget(QLabel("Powerline State"))
-        messageLayout.addWidget(self.powerlineStateTextEdit)
-        messageLayout.addWidget(QLabel("Extras"))
-        messageLayout.addWidget(self.extrasTextEdit)
-        messageLayout.addWidget(QLabel("Notifications"))
-        messageLayout.addWidget(self.notificationsTextEdit)
-        messageLayout.addWidget(QLabel("Print Messages"))
-        messageLayout.addWidget(self.printTextEdit)
-        messageLayout.addWidget(QLabel("Errors"))
-        messageLayout.addWidget(self.errorLogTextEdit)
+        # --- Status group ---
+        statusBox = QGroupBox("Status")
+        statusLayout = QGridLayout(statusBox)
+        statusLayout.addWidget(QLabel("Running:"), 0, 0)
+        self.runningIndicator = QLabel()
+        self.runningIndicator.setFixedSize(16,16)
+        statusLayout.addWidget(self.runningIndicator, 0, 1)
+        statusLayout.addWidget(QLabel("Run enable - Software:"), 1, 0)
+        self.softwareRunEnable = QLabel()
+        self.softwareRunEnable.setFixedSize(16,16)
+        statusLayout.addWidget(self.softwareRunEnable, 1, 1)
+        statusLayout.addWidget(QLabel("Run enable - Hardware:"), 2, 0)
+        self.hardwareRunEnable = QLabel()
+        self.hardwareRunEnable.setFixedSize(16,16)
+        statusLayout.addWidget(self.hardwareRunEnable, 2, 1)
+        statusLayout.addWidget(QLabel("Current address:"), 3, 0)
+        self.currentAddrLabel = QLabel("—")
+        statusLayout.addWidget(self.currentAddrLabel,3,1)
+        statusLayout.addWidget(QLabel("Final address:"),4,0)
+        self.finalAddrLabel = QLabel("—")
+        statusLayout.addWidget(self.finalAddrLabel,4,1)
+        statusLayout.addWidget(QLabel("Total run time:"),5,0)
+        self.runTimeLabel = QLabel("—")
+        statusLayout.addWidget(self.runTimeLabel,5,1)
 
-        # Put the message area inside a scrollable widget.
-        messageWidget = QWidget()
-        messageWidget.setLayout(messageLayout)
-        scrollArea = QScrollArea()
-        scrollArea.setWidget(messageWidget)
-        scrollArea.setWidgetResizable(True)
+        # --- Trigger In group ---
+        inBox = QGroupBox("Trigger in")
+        inLayout = QGridLayout(inBox)
+        inLayout.addWidget(QLabel("Accept hardware trigger:"),0,0)
+        self.acceptHwCombo = QComboBox()
+        self.acceptHwCombo.addItems(["never","always","single_run","once"])
+        self.acceptHwCombo.currentTextChanged.connect(self.on_accept_hw_changed)
+        inLayout.addWidget(self.acceptHwCombo,0,1)
+        inLayout.addWidget(QLabel("Wait for powerline:"),1,0)
+        self.waitCheckbox = QCheckBox()
+        self.waitCheckbox.stateChanged.connect(self.on_wait_changed)
+        inLayout.addWidget(self.waitCheckbox,1,1)
+        inLayout.addWidget(QLabel("Delay after powerline (ms):"),2,0)
+        self.delaySpin = QDoubleSpinBox()
+        self.delaySpin.setDecimals(5)
+        self.delaySpin.setRange(0.0,10000.0)
+        self.delaySpin.valueChanged.connect(self.on_delay_ms_changed)
+        inLayout.addWidget(self.delaySpin,2,1)
 
-        # Assemble the upper part: device selection and toggle buttons.
-        upperLayout = QVBoxLayout()
-        upperLayout.addWidget(self.deviceComboBox)
-        upperLayout.addLayout(grid)
+        # --- Synchronisation group ---
+        syncBox = QGroupBox("Synchronisation")
+        syncLayout = QGridLayout(syncBox)
+        syncLayout.addWidget(QLabel("Reference clock:"),0,0)
+        self.refClockLabel = QLabel("—")
+        syncLayout.addWidget(self.refClockLabel,0,1)
+        syncLayout.addWidget(QLabel("Powerline frequency:"),1,0)
+        self.plFreqLabel = QLabel("—")
+        syncLayout.addWidget(self.plFreqLabel,1,1)
 
-        # Main layout: upper part and scrollable message area.
-        mainLayout = QVBoxLayout()
-        mainLayout.addLayout(upperLayout)
-        mainLayout.addWidget(scrollArea)
+        # --- Trigger Out group ---
+        outBox = QGroupBox("Trigger out")
+        outLayout = QGridLayout(outBox)
+        outLayout.addWidget(QLabel("Duration (µs):"),0,0)
+        self.durationSpin = QDoubleSpinBox()
+        self.durationSpin.setDecimals(3)
+        self.durationSpin.setRange(0.0,1e6)
+        self.durationSpin.valueChanged.connect(self.on_duration_us_changed)
+        outLayout.addWidget(self.durationSpin,0,1)
+        outLayout.addWidget(QLabel("Delay (s):"),1,0)
+        self.delayOutSpin = QDoubleSpinBox()
+        self.delayOutSpin.setDecimals(9)
+        self.delayOutSpin.setRange(0.0,1e3)
+        self.delayOutSpin.valueChanged.connect(self.on_delay_s_changed)
+        outLayout.addWidget(self.delayOutSpin,1,1)
 
-        centralWidget = QWidget()
-        centralWidget.setLayout(mainLayout)
-        self.setCentralWidget(centralWidget)
+        # --- Device info group ---
+        infoBox = QGroupBox("Device info")
+        infoLayout = QGridLayout(infoBox)
+        infoLayout.addWidget(QLabel("Serial Number:"),0,0)
+        self.serialLabel = QLabel("—")
+        infoLayout.addWidget(self.serialLabel,0,1)
+        infoLayout.addWidget(QLabel("Firmware version:"),1,0)
+        self.fwLabel = QLabel("—")
+        infoLayout.addWidget(self.fwLabel,1,1)
+        infoLayout.addWidget(QLabel("Hardware version:"),2,0)
+        self.hwLabel = QLabel("—")
+        infoLayout.addWidget(self.hwLabel,2,1)
+        infoLayout.addWidget(QLabel("Comport:"),3,0)
+        self.comportLabel = QLabel("—")
+        infoLayout.addWidget(self.comportLabel,3,1)
+
+        # --- Notifications group ---
+        notifBox = QGroupBox("Notifications")
+        notifLayout = QGridLayout(notifBox)
+        self.notifyTrigCheckbox = QCheckBox("Notify on trigger out")
+        self.notifyTrigCheckbox.stateChanged.connect(self.on_notify_trig_changed)
+        notifLayout.addWidget(self.notifyTrigCheckbox,0,0,1,2)
+        self.notifyFinishedCheckbox = QCheckBox("Notify when finished")
+        self.notifyFinishedCheckbox.stateChanged.connect(self.on_notify_finished_changed)
+        notifLayout.addWidget(self.notifyFinishedCheckbox,1,0,1,2)
+        notifLayout.addWidget(QLabel("Incoming Notifications:"),2,0)
+        self.notifLog = QTextEdit()
+        self.notifLog.setReadOnly(True)
+        notifLayout.addWidget(self.notifLog,3,0,1,2)
+
+        # --- Layout group boxes ---
+        groups = QGridLayout()
+        groups.addWidget(statusBox,0,0)
+        groups.addWidget(inBox,    0,1)
+        groups.addWidget(syncBox,  1,0)
+        groups.addWidget(outBox,   1,1)
+        groups.addWidget(infoBox,  2,0)
+        groups.addWidget(notifBox, 2,1)
+
+        centralLayout = QVBoxLayout()
+        centralLayout.addLayout(topLayout)
+        centralLayout.addLayout(groups)
+        central = QWidget()
+        central.setLayout(centralLayout)
+        self.setCentralWidget(central)
+
+        # --- Handlers for UI -> device updates ---
+    def on_accept_hw_changed(self, text):
+        try:
+            self.pg.write_device_options(accept_hardware_trigger=text)
+        except Exception as e:
+            self.notifLog.append(f"Error setting accept_hardware_trigger: {e}")
+
+    def on_wait_changed(self, state):
+        try:
+            self.pg.write_powerline_trigger_options(trigger_on_powerline=bool(state))
+        except Exception as e:
+            self.notifLog.append(f"Error setting wait for powerline: {e}")
+
+    def on_delay_ms_changed(self, val):
+        try:
+            self.pg.write_powerline_trigger_options(powerline_trigger_delay=int(val))
+        except Exception as e:
+            self.notifLog.append(f"Error setting powerline delay: {e}")
+
+    def on_duration_us_changed(self, val):
+        try:
+            self.pg.write_device_options(trigger_out_length=int(val))
+        except Exception as e:
+            self.notifLog.append(f"Error setting trigger out duration: {e}")
+
+    def on_delay_s_changed(self, val):
+        try:
+            self.pg.write_device_options(trigger_out_delay=int(val))
+        except Exception as e:
+            self.notifLog.append(f"Error setting trigger out delay: {e}")
+
+    def on_notify_trig_changed(self, state):
+        try:
+            self.pg.write_device_options(notify_on_main_trig_out=bool(state))
+        except Exception as e:
+            self.notifLog.append(f"Error setting notify on trigger out: {e}")
+
+    def on_notify_finished_changed(self, state):
+        try:
+            self.pg.write_device_options(notify_when_run_finished=bool(state))
+        except Exception as e:
+            self.notifLog.append(f"Error setting notify when finished: {e}")
+
+    # ... existing update_status, check/connect/disconnect etc remain unchanged ...
 
     def make_toggle_handler(self, channel):
         def handler(checked):
@@ -116,118 +219,122 @@ class MainWindow(QMainWindow):
             try:
                 self.pg.write_static_state(state)
             except Exception as e:
-                self.errorLogTextEdit.append("Error sending static state: " + str(e))
+                self.notifLog.append("Error sending static state: " + str(e))
         return handler
 
     def check_devices(self):
         try:
-            devices_info = self.pg.get_connected_devices()
-            validated = devices_info.get('validated_devices', [])
+            devs = self.pg.get_connected_devices().get('validated_devices', [])
             self.deviceComboBox.clear()
-            for dev in validated:
-                display_text = f"SN: {dev['serial_number']} on {dev['comport']}"
-                self.deviceComboBox.addItem(display_text, dev)
-            if not validated:
-                self.errorLogTextEdit.append("No validated devices found.")
-            else:
-                self.notificationsTextEdit.append("Devices updated.")
+            for d in devs:
+                self.deviceComboBox.addItem(f"SN: {d['serial_number']} on {d['comport']}", d)
+            self.notifLog.append("Devices updated." if devs else "No devices found.")
         except Exception as e:
-            self.errorLogTextEdit.append("Error checking devices: " + str(e))
+            self.notifLog.append("Error checking devices: " + str(e))
 
     def connect_device(self):
-        index = self.deviceComboBox.currentIndex()
-        if index >= 0:
-            device = self.deviceComboBox.itemData(index)
-            serial_number = device['serial_number']
+        idx = self.deviceComboBox.currentIndex()
+        if idx >= 0:
+            dev = self.deviceComboBox.itemData(idx)
             try:
-                self.pg.connect(serial_number)
-                self.notificationsTextEdit.append("Connected to device.")
+                self.pg.connect(dev['serial_number'])
+                self.notifLog.append("Connected.")
             except Exception as e:
-                self.errorLogTextEdit.append("Error connecting: " + str(e))
+                self.notifLog.append("Error connecting: " + str(e))
 
     def disconnect_device(self):
         try:
             self.pg.disconnect()
-            self.notificationsTextEdit.append("Disconnected.")
+            self.notifLog.append("Disconnected.")
         except Exception as e:
-            self.errorLogTextEdit.append("Error during disconnect: " + str(e))
+            self.notifLog.append("Error disconnecting: " + str(e))
 
     def setup_timer(self):
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_status)
-        self.timer.start(100)  # Update every 100 ms
+        self.timer.start(100)
 
     def update_status(self):
+        # gather and process all three status queues:
         try:
             if not self.pg.ser.is_open:
                 return
-            # Request all state messages in one command.
-            self.pg.write_action(request_state=True, request_powerline_state=True, request_state_extras=True)
+            self.pg.write_action(
+                request_state=True,
+                request_powerline_state=True,
+                request_state_extras=True
+            )
         except Exception as e:
-            self.errorLogTextEdit.append("Error requesting state: " + str(e))
+            self.notifLog.append("Error requesting state: " + str(e))
             return
 
-        # Process each queue.
-        # Device State
-        latest_devicestate = None
+        # -- devicestate --
+        ds = None
         while not self.pg.msgin_queues['devicestate'].empty():
-            latest_devicestate = self.pg.msgin_queues['devicestate'].get_nowait()
-        if latest_devicestate:
-            if 'state' in latest_devicestate:
-                bit_array = latest_devicestate['state']
-                for i, btn in enumerate(self.outputButtons):
-                    btn.blockSignals(True)
-                    btn.setChecked(bool(bit_array[i]))
-                    btn.blockSignals(False)
-            self.deviceStateTextEdit.setText(str(latest_devicestate))
-        
-        # Powerline State
-        latest_powerline = None
+            ds = self.pg.msgin_queues['devicestate'].get_nowait()
+        if ds:
+            # indicators
+            self.runningIndicator.setStyleSheet(
+                "background-color: green; border-radius: 8px;" if ds.get('running')
+                else "background-color: red; border-radius: 8px;"
+            )
+            self.softwareRunEnable.setStyleSheet(
+                "background-color: green; border-radius: 8px;" if ds.get('software_run_enable')
+                else "background-color: red; border-radius: 8px;"
+            )
+            self.hardwareRunEnable.setStyleSheet(
+                "background-color: green; border-radius: 8px;" if ds.get('hardware_run_enable')
+                else "background-color: red; border-radius: 8px;"
+            )
+            # accept-hw combo
+            ah = ds.get('accept_hardware_trigger', 'never')
+            idx = self.acceptHwCombo.findText(ah)
+            if idx >= 0:
+                self.acceptHwCombo.setCurrentIndex(idx)
+            # trigger out params
+            self.durationSpin.setValue(float(ds.get('trigger_out_length', 0)))
+            self.delayOutSpin.setValue(float(ds.get('trigger_out_delay', 0)))
+            # addresses
+            self.currentAddrLabel.setText(str(ds.get('current_address', '—')))
+            self.finalAddrLabel.setText(str(ds.get('final_address', '—')))
+
+        # -- powerlinestate --
+        ps = None
         while not self.pg.msgin_queues['powerlinestate'].empty():
-            latest_powerline = self.pg.msgin_queues['powerlinestate'].get_nowait()
-        if latest_powerline:
-            self.powerlineStateTextEdit.setText(str(latest_powerline))
+            ps = self.pg.msgin_queues['powerlinestate'].get_nowait()
+        if ps:
+            self.refClockLabel.setText(ps.get('clock_source', '—'))
+            self.plFreqLabel.setText(str(ps.get('powerline_period', '—')))
+            self.waitCheckbox.setChecked(ps.get('trig_on_powerline', False))
+            self.delaySpin.setValue(ps.get('powerline_trigger_delay', 0.0))
 
-        # Extras
-        latest_extras = None
+        # -- devicestate_extras --
+        de = None
         while not self.pg.msgin_queues['devicestate_extras'].empty():
-            latest_extras = self.pg.msgin_queues['devicestate_extras'].get_nowait()
-        if latest_extras:
-            self.extrasTextEdit.setText(str(latest_extras))
-        
-        # Device Info (Echo): Overwrite with the most recent echo message.
-        latest_echo = None
+            de = self.pg.msgin_queues['devicestate_extras'].get_nowait()
+        if de:
+            self.runTimeLabel.setText(str(de.get('run_time', '—')))
+
+        # -- echo (device info) --
+        echo = None
         while not self.pg.msgin_queues['echo'].empty():
-            latest_echo = self.pg.msgin_queues['echo'].get_nowait()
-        if latest_echo:
-            comport = self.pg.ser.port if self.pg.ser.is_open else "Not connected"
-            info_str = (f"Comport: {comport}\n"
-                        f"Echoed Byte: {latest_echo.get('echoed_byte')}\n"
-                        f"Device Type: {latest_echo.get('device_type')}\n"
-                        f"Hardware Version: {latest_echo.get('hardware_version')}\n"
-                        f"Firmware Version: {latest_echo.get('firmware_version')}\n"
-                        f"Serial Number: {latest_echo.get('serial_number')}")
-            self.deviceInfoTextEdit.setText(info_str)
+            echo = self.pg.msgin_queues['echo'].get_nowait()
+        if echo:
+            self.serialLabel.setText(str(echo.get('serial_number', '—')))
+            self.fwLabel.setText(echo.get('firmware_version', '—'))
+            self.hwLabel.setText(str(echo.get('hardware_version', '—')))
+            self.comportLabel.setText(self.pg.ser.port or "—")
 
-        # Notifications: Append all new notifications.
+        # -- notifications & errors --
         while not self.pg.msgin_queues['notification'].empty():
-            notif = self.pg.msgin_queues['notification'].get_nowait()
-            self.notificationsTextEdit.append(str(notif))
-
-        # Print messages: Append.
-        while not self.pg.msgin_queues['print'].empty():
-            msg = self.pg.msgin_queues['print'].get_nowait()
-            self.printTextEdit.append(str(msg))
-
-        # Error messages: Append from the 'error' queue.
+            n = self.pg.msgin_queues['notification'].get_nowait()
+            self.notifLog.append(str(n))
         while not self.pg.msgin_queues['error'].empty():
             err = self.pg.msgin_queues['error'].get_nowait()
-            self.errorLogTextEdit.append(str(err))
-
-        # Bytes dropped: Append as errors.
+            self.notifLog.append(str(err))
         while not self.pg.msgin_queues['bytes_dropped'].empty():
             bd = self.pg.msgin_queues['bytes_dropped'].get_nowait()
-            self.errorLogTextEdit.append("Bytes Dropped: " + str(bd))
+            self.notifLog.append("Bytes dropped: " + str(bd))
 
 def main():
     app = QApplication(sys.argv)
