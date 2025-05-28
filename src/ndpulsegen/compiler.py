@@ -78,12 +78,17 @@ class Compiler:
         if t_to not in self.updates:
             self.updates[t_to] = {'states': {}, 'goto': {}, 'flags': {}}
 
-    def channel(self, channel_number: int):
+    def channel(self, channel_number: int, starting_state = None):
         """
         Retrieve or create a Channel object for the given channel.
+        starting_state: None, True, False. Allows you to specify what the channel will be set to on the
+        first instruction executed (at t=0).
         """
         if channel_number not in self.channels:
             self.channels[channel_number] = Channel(channel_number, self)
+
+        if starting_state is not None:
+            self.starting_state[channel_number] = bool(starting_state)
         return self.channels[channel_number]
 
     def compile(self):

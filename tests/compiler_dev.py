@@ -11,18 +11,17 @@ def basic_compiler_test():
 
     compiler = ndpulsegen.Compiler()
 
-    aom = compiler.channel(9)
+    aom = compiler.channel(9, starting_state=False)
 
-    compiler.starting_state[3] = False
     # compiler.add_update(0, {0: True, 2:True})
     # compiler.add_update(7, {0: False})
-    compiler.add_update(3, notify_computer=True, powerline_sync=True, time_unit='clock_cycles')
+    # compiler.add_update(3e-3, notify_computer=True, powerline_sync=True)
 
-    aom.high(7, hardware_trig_out=True, time_unit='clock_cycles')
+    # aom.high(7, hardware_trig_out=True)
     # aom.low(8)
-    # pulse_duration = aom.pulse_high(t=10, duration_high=2, duration_low = 3, N = 2, flags_mode = 'start', hardware_trig_out=True)
-    # pulse_duration = aom.pulse_low(t=10, duration_low=2, duration_high = 3, N = 2, flags_mode = 'start', hardware_trig_out=True)
-    pulse_duration = aom.pulse_low(10, 5, time_unit='clock_cycles')
+    # pulse_duration = aom.pulse_high(t=10, duration_high=2, duration_low = 3, N = 2, flags_mode = 'start')
+    # pulse_duration = aom.pulse_low(t=10, duration_low=2, duration_high = 3, N = 2, flags_mode = 'start')
+    pulse_duration = aom.pulse_low(t=10e-3, duration_low =2e-3)
 
     # print(pulse_duration)
     # print(cplr.updates)
@@ -78,8 +77,8 @@ if __name__ == "__main__":
     # print(pg.get_connected_devices())
     # pg.connect()
 
-    basic_compiler_test_time_units()
-    # basic_compiler_test() 
+    # basic_compiler_test_time_units()
+    basic_compiler_test() 
     # goto_compiler_test()
 
     # for a in range(-1):
