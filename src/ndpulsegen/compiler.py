@@ -10,6 +10,7 @@ class Compiler:
         self.instructions = []
         self.channels = {}  # Cache for Channel objects
         self.sequence_duration = None  # Optional overall sequence duration
+        self.final_address = None
 
     def set_starting_state(self, state_dict: dict):
         """Update the starting state for multiple channels."""
@@ -129,13 +130,14 @@ class Compiler:
             # Create a boolean list representing channels 0 through 23
             state = [current_state[i] for i in range(24)]
             # Get the goto_time is it exists. Otherwise make it 0.
-            print(current_update)
+            # print(current_update)
             t_to = current_update[1]['goto'].get('t_to', 0)
             # Encode the instruction. 
             # Use the address of the instruction at time t_to instruction. And use the goto counter if it exists, otherwise 0.
             self.instructions.append(
                 encode_instruction(address, duration, state, time_to_address_lookup[t_to], current_update[1]['goto'].get('counter', 0), **current_update[1]['flags'])
             )
+        self.final_address = len(self.instructions) - 1
         return self.instructions
 
     def upload_instructions(self, pulse_generator: PulseGenerator) -> None:
@@ -145,7 +147,7 @@ class Compiler:
         to your own pulse_generator instance manually.
         """
         pulse_generator.write_instructions(self.instructions)
-        pulse_generator.write_device_options(final_address=len(self.instructions))
+        pulse_generator.write_device_options(final_address=len(self.instructions)-1)
 
 
 class Channel:
