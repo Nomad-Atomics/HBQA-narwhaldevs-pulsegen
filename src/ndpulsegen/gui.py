@@ -28,6 +28,7 @@ class SerialWorker(QObject):
     notification = pyqtSignal(dict)
     echo = pyqtSignal(dict)
     easyprint = pyqtSignal(dict)
+    internalError = pyqtSignal(dict)
     bytesDropped = pyqtSignal(int, float)
     errorOccurred = pyqtSignal(str)
     finished = pyqtSignal()
@@ -50,41 +51,48 @@ class SerialWorker(QObject):
                 try:
                     b = self.ser.read(1)
                 except serial.serialutil.SerialException as ex:
-                    self.errorOccurred.emit(str(ex)); break
+                    self.errorOccurred.emit(str(ex))
+                    break
                 if not b:
                     continue
                 ts = time.time()
                 msg_id = b[0]
                 dinfo = transcode.msgin_decodeinfo.get(msg_id)
                 if not dinfo:
-                    self.bytesDropped.emit(msg_id, ts); continue
-                remaining = dinfo['message_length'] - 1
+                    self.bytesDropped.emit(msg_id, ts)
+                    continue
+                remaining = dinfo["message_length"] - 1
                 try:
                     payload = self.ser.read(remaining)
                 except serial.serialutil.SerialException as ex:
-                    self.errorOccurred.emit(str(ex)); break
+                    self.errorOccurred.emit(str(ex))
+                    break
                 if len(payload) != remaining:
-                    self.bytesDropped.emit(msg_id, ts); continue
+                    self.bytesDropped.emit(msg_id, ts)
+                    continue
                 try:
-                    decoded = dinfo['decode_function'](payload)
+                    decoded = dinfo["decode_function"](payload)
                 except Exception as ex:
-                    self.errorOccurred.emit(f"Decode failed for id {msg_id}: {ex}"); continue
-                decoded['timestamp'] = ts
-                decoded['message_type'] = dinfo['message_type']
+                    self.errorOccurred.emit(f"Decode failed for id {msg_id}: {ex}")
+                    continue
+                decoded["timestamp"] = ts
+                decoded["message_type"] = dinfo["message_type"]
                 self.messageReceived.emit(decoded)
-                mtype = dinfo['message_type']
-                if mtype == 'devicestate':
+                mtype = dinfo["message_type"]
+                if mtype == "devicestate":
                     self.devicestate.emit(decoded)
-                elif mtype == 'powerlinestate':
+                elif mtype == "powerlinestate":
                     self.powerlinestate.emit(decoded)
-                elif mtype == 'devicestate_extras':
+                elif mtype == "devicestate_extras":
                     self.devicestate_extras.emit(decoded)
-                elif mtype == 'notification':
+                elif mtype == "notification":
                     self.notification.emit(decoded)
-                elif mtype == 'echo':
+                elif mtype == "echo":
                     self.echo.emit(decoded)
-                elif mtype == 'print':
+                elif mtype == "print":
                     self.easyprint.emit(decoded)
+                elif mtype == 'error':
+                    self.internalError.emit(decoded)
         finally:
             self.finished.emit()
 
@@ -96,6 +104,7 @@ class PulseGenerator(QObject):
     notification = pyqtSignal(dict)
     echo = pyqtSignal(dict)
     easyprint = pyqtSignal(dict)
+    internalError = pyqtSignal(dict)
     bytesDropped = pyqtSignal(int, float)
     errorOccurred = pyqtSignal(str)
     connected = pyqtSignal(str)
@@ -133,6 +142,7 @@ class PulseGenerator(QObject):
         self._worker.notification.connect(self.notification)
         self._worker.echo.connect(self.echo)
         self._worker.easyprint.connect(self.easyprint)
+        self._worker.internalError.connect(self.internalError)
         self._worker.bytesDropped.connect(self.bytesDropped)
         self._worker.errorOccurred.connect(self.errorOccurred)
         self._thread.started.connect(self._worker.run)
@@ -146,8 +156,10 @@ class PulseGenerator(QObject):
         if self._worker:
             self._worker.stop()
         if self._thread:
-            self._thread.quit(); self._thread.wait(1500)
-        self._worker = None; self._thread = None
+            self._thread.quit()
+            self._thread.wait(1500)
+        self._worker = None
+        self._thread = None
 
     def disconnect(self):
         try:
@@ -162,73 +174,101 @@ class PulseGenerator(QObject):
     def connect(self, serial_number: Optional[int] = None, port: Optional[str] = None) -> bool:
         if self.is_open():
             try:
-                self.ser.reset_input_buffer(); self.ser.reset_output_buffer()
-            except Exception: pass
+                self.ser.reset_input_buffer()
+                self.ser.reset_output_buffer()
+            except Exception:
+                pass
             return True
 
-        target_port = None; device_meta = None
+        target_port = None
+        device_meta = None
         if serial_number is not None or port is None:
-            devices = self.get_connected_devices()['validated_devices']
+            devices = self.get_connected_devices()["validated_devices"]
             for d in devices:
-                if (serial_number is not None and d.get('serial_number') == serial_number) or \
-                   (serial_number is None and port is None):
-                    target_port = d['comport']; device_meta = d; break
+                if (serial_number is not None and d.get("serial_number") == serial_number) or (
+                    serial_number is None and port is None
+                ):
+                    target_port = d["comport"]
+                    device_meta = d
+                    break
         if port is not None and target_port is None:
             target_port = port
-        if not target_port: return False
+        if not target_port:
+            return False
 
-        self.ser.port = target_port; self.ser.open()
-        self.ser.reset_input_buffer(); self.ser.reset_output_buffer()
+        self.ser.port = target_port
+        self.ser.open()
+        self.ser.reset_input_buffer()
+        self.ser.reset_output_buffer()
         self._start_reader()
 
         if device_meta:
-            self.serial_number_save = device_meta.get('serial_number')
-            self.device_type = device_meta.get('device_type')
-            self.firmware_version = device_meta.get('firmware_version')
-            self.hardware_version = device_meta.get('hardware_version')
+            self.serial_number_save = device_meta.get("serial_number")
+            self.device_type = device_meta.get("device_type")
+            self.firmware_version = device_meta.get("firmware_version")
+            self.hardware_version = device_meta.get("hardware_version")
         return True
 
     def get_connected_devices(self) -> Dict[str, Any]:
-        validated_devices = []; unvalidated = []
+        validated_devices = []
+        unvalidated = []
         comports = list(serial.tools.list_ports.comports())
-        valid_ports = [cp for cp in comports if getattr(cp, 'vid', None) == self._valid_vid and getattr(cp, 'pid', None) == self._valid_pid]
+        valid_ports = [
+            cp
+            for cp in comports
+            if getattr(cp, "vid", None) == self._valid_vid and getattr(cp, "pid", None) == self._valid_pid
+        ]
         for cp in valid_ports:
             ok, meta = self._try_handshake(cp.device)
-            if ok and meta: meta['comport'] = cp.device; validated_devices.append(meta)
-            else: unvalidated.append(cp.device)
-        return {'validated_devices': validated_devices, 'unvalidated_devices': unvalidated}
+            if ok and meta:
+                meta["comport"] = cp.device
+                validated_devices.append(meta)
+            else:
+                unvalidated.append(cp.device)
+        return {"validated_devices": validated_devices, "unvalidated_devices": unvalidated}
 
     def _try_handshake(self, port: str, timeout_s: float = 1.0):
         s = serial.Serial()
-        s.port = port; s.baudrate = self.ser.baudrate; s.timeout = 0.2; s.write_timeout = 0.5
-        try: s.open()
-        except Exception: return False, None
+        s.port = port
+        s.baudrate = self.ser.baudrate
+        s.timeout = 0.2
+        s.write_timeout = 0.5
         try:
-            s.reset_input_buffer(); s.reset_output_buffer()
+            s.open()
+        except Exception:
+            return False, None
+        try:
+            s.reset_input_buffer()
+            s.reset_output_buffer()
             check_byte = bytes([209])
             s.write(transcode.encode_echo(check_byte))
             t0 = time.time()
             while time.time() - t0 < timeout_s:
                 b = s.read(1)
-                if not b: continue
+                if not b:
+                    continue
                 msg_id = b[0]
                 dinfo = transcode.msgin_decodeinfo.get(msg_id)
-                if not dinfo: continue
-                remaining = dinfo['message_length'] - 1
+                if not dinfo:
+                    continue
+                remaining = dinfo["message_length"] - 1
                 payload = s.read(remaining)
-                if len(payload) != remaining: continue
-                decoded = dinfo['decode_function'](payload)
-                if dinfo['message_type'] == 'echo' and decoded.get('echoed_byte') == check_byte:
+                if len(payload) != remaining:
+                    continue
+                decoded = dinfo["decode_function"](payload)
+                if dinfo["message_type"] == "echo" and decoded.get("echoed_byte") == check_byte:
                     return True, {
-                        'device_type': decoded.get('device_type'),
-                        'hardware_version': decoded.get('hardware_version'),
-                        'firmware_version': decoded.get('firmware_version'),
-                        'serial_number': decoded.get('serial_number'),
+                        "device_type": decoded.get("device_type"),
+                        "hardware_version": decoded.get("hardware_version"),
+                        "firmware_version": decoded.get("firmware_version"),
+                        "serial_number": decoded.get("serial_number"),
                     }
             return False, None
         finally:
-            try: s.close()
-            except Exception: pass
+            try:
+                s.close()
+            except Exception:
+                pass
 
     def write_command(self, encoded_command: bytes):
         if not self.is_open():
@@ -239,18 +279,27 @@ class PulseGenerator(QObject):
     def write_echo(self, byte_to_echo: bytes):
         self.write_command(transcode.encode_echo(byte_to_echo))
 
-    def write_device_options(self, final_address=None, run_mode=None,
-                             accept_hardware_trigger=None,
-                             trigger_out_length=None, trigger_out_delay=None,
-                             notify_on_main_trig_out=None,
-                             notify_when_run_finished=None,
-                             software_run_enable=None):
+    def write_device_options(
+        self,
+        final_address=None,
+        run_mode=None,
+        accept_hardware_trigger=None,
+        trigger_out_length=None,
+        trigger_out_delay=None,
+        notify_on_main_trig_out=None,
+        notify_when_run_finished=None,
+        software_run_enable=None,
+    ):
         self.write_command(
             transcode.encode_device_options(
-                final_address, run_mode, accept_hardware_trigger,
-                trigger_out_length, trigger_out_delay,
-                notify_on_main_trig_out, notify_when_run_finished,
-                software_run_enable
+                final_address,
+                run_mode,
+                accept_hardware_trigger,
+                trigger_out_length,
+                trigger_out_delay,
+                notify_on_main_trig_out,
+                notify_when_run_finished,
+                software_run_enable,
             )
         )
 
@@ -259,12 +308,23 @@ class PulseGenerator(QObject):
             transcode.encode_powerline_trigger_options(trigger_on_powerline, powerline_trigger_delay)
         )
 
-    def write_action(self, trigger_now=False, disable_after_current_run=False, disarm=False,
-                     request_state=False, request_powerline_state=False, request_state_extras=False):
+    def write_action(
+        self,
+        trigger_now=False,
+        disable_after_current_run=False,
+        disarm=False,
+        request_state=False,
+        request_powerline_state=False,
+        request_state_extras=False,
+    ):
         self.write_command(
             transcode.encode_action(
-                trigger_now, disable_after_current_run, disarm,
-                request_state, request_powerline_state, request_state_extras
+                trigger_now,
+                disable_after_current_run,
+                disarm,
+                request_state,
+                request_powerline_state,
+                request_state_extras,
             )
         )
 
@@ -275,10 +335,11 @@ class PulseGenerator(QObject):
         self.write_command(transcode.encode_static_state(state))
 
     def write_instructions(self, instructions: List[bytes]):
-        if hasattr(transcode, 'encode_instructions'):
+        if hasattr(transcode, "encode_instructions"):
             self.write_command(transcode.encode_instructions(instructions))
         else:
-            for instr in instructions: self.write_command(instr)
+            for instr in instructions:
+                self.write_command(instr)
 
 
 class MainWindow(QMainWindow):
@@ -298,6 +359,7 @@ class MainWindow(QMainWindow):
         self.pg.notification.connect(self.on_notification)
         self.pg.echo.connect(self.on_echo)
         self.pg.easyprint.connect(self.on_easyprint)
+        self.pg.internalError.connect(self.on_internal_error)
         self.pg.bytesDropped.connect(self.on_bytes_dropped)
         self.pg.errorOccurred.connect(self.on_error)
         self.pg.connected.connect(self.on_connected)
@@ -309,10 +371,18 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Ready", 2000)
 
         # Toolbar
-        toolbar = QToolBar("Main"); toolbar.setIconSize(QSize(16, 16)); self.addToolBar(toolbar)
-        self.refreshAction = QAction("Refresh Devices", self); self.refreshAction.triggered.connect(self.check_devices); toolbar.addAction(self.refreshAction)
-        self.connectAction = QAction("Connect", self); self.connectAction.triggered.connect(self.connect_device); toolbar.addAction(self.connectAction)
-        self.disconnectAction = QAction("Disconnect", self); self.disconnectAction.triggered.connect(self.disconnect_device); toolbar.addAction(self.disconnectAction)
+        toolbar = QToolBar("Main")
+        toolbar.setIconSize(QSize(16, 16))
+        self.addToolBar(toolbar)
+        self.refreshAction = QAction("Refresh Devices", self)
+        self.refreshAction.triggered.connect(self.check_devices)
+        toolbar.addAction(self.refreshAction)
+        self.connectAction = QAction("Connect", self)
+        self.connectAction.triggered.connect(self.connect_device)
+        toolbar.addAction(self.connectAction)
+        self.disconnectAction = QAction("Disconnect", self)
+        self.disconnectAction.triggered.connect(self.disconnect_device)
+        toolbar.addAction(self.disconnectAction)
 
         # Device chooser
         self.deviceComboBox = QComboBox()
@@ -322,15 +392,22 @@ class MainWindow(QMainWindow):
         self.channelWidgets = []  # list of (QLineEdit, QPushButton)
         for i in range(24):
             container = QWidget()
-            vbox = QVBoxLayout(container); vbox.setContentsMargins(2,2,2,2); vbox.setSpacing(2)
-            label_edit = QLineEdit(); label_edit.setPlaceholderText(f"Ch {i}")
+            vbox = QVBoxLayout(container)
+            vbox.setContentsMargins(2, 2, 2, 2)
+            vbox.setSpacing(2)
+            label_edit = QLineEdit()
+            label_edit.setPlaceholderText(f"Ch {i}")
             saved = self.settings.value(f"channels/{i}", "")
-            if saved is None: saved = ""
+            if saved is None:
+                saved = ""
             label_edit.setText(saved)
-            label_edit.editingFinished.connect(lambda i=i, e=label_edit: self.settings.setValue(f"channels/{i}", e.text()))
+            label_edit.editingFinished.connect(
+                lambda i=i, e=label_edit: self.settings.setValue(f"channels/{i}", e.text())
+            )
             vbox.addWidget(label_edit)
 
-            btn = QPushButton(str(i)); btn.setCheckable(True)
+            btn = QPushButton(str(i))
+            btn.setCheckable(True)
             btn.clicked.connect(self.make_toggle_handler(i))
             vbox.addWidget(btn)
 
@@ -342,81 +419,191 @@ class MainWindow(QMainWindow):
         manualLayout = QVBoxLayout(manualBox)
         manualLayout.addLayout(channelGrid)
 
-        # Global manual controls
-        globalsRow = QHBoxLayout()
-        allOn = QPushButton("All ON"); allOff = QPushButton("All OFF"); invert = QPushButton("Invert")
-        allOn.clicked.connect(self.set_all_on); allOff.clicked.connect(self.set_all_off); invert.clicked.connect(self.invert_all)
-        globalsRow.addWidget(allOn); globalsRow.addWidget(allOff); globalsRow.addWidget(invert); globalsRow.addStretch(1)
-        manualLayout.addLayout(globalsRow)
+        groupsBox = QGroupBox("Channel groups")
+        groupsLayout = QGridLayout(groupsBox)
+        self.groupConfigs = []
+
+        # Header row
+        groupsLayout.addWidget(QLabel("Name"),           0, 0)
+        groupsLayout.addWidget(QLabel("On channels"),    0, 1)
+        groupsLayout.addWidget(QLabel("Off channels"),   0, 2)
+        groupsLayout.addWidget(QLabel("On/Off"),         0, 3)   # label change
+
+        for i in range(4):
+            nameEdit = QLineEdit()
+            nameEdit.setPlaceholderText(f"Group {i+1}")
+            saved_name = self.settings.value(f"groups/{i}/name", "")
+            if saved_name is not None:
+                nameEdit.setText(saved_name)
+
+            onEdit = QLineEdit()
+            onEdit.setPlaceholderText("e.g. 0,1,5-7")
+            saved_on = self.settings.value(f"groups/{i}/on", "")
+            if saved_on is not None:
+                onEdit.setText(saved_on)
+
+            offEdit = QLineEdit()
+            offEdit.setPlaceholderText("e.g. 2,3")
+            saved_off = self.settings.value(f"groups/{i}/off", "")
+            if saved_off is not None:
+                offEdit.setText(saved_off)
+
+            # Toggle button instead of one-shot Apply
+            toggleBtn = QPushButton("Off")
+            toggleBtn.setCheckable(True)
+            toggleBtn.setChecked(False)
+            toggleBtn.toggled.connect(lambda checked, idx=i: self.on_group_toggled(idx, checked))
+
+            # Persist text fields
+            nameEdit.editingFinished.connect(
+                lambda idx=i, w=nameEdit: self.settings.setValue(f"groups/{idx}/name", w.text())
+            )
+            onEdit.editingFinished.connect(
+                lambda idx=i, w=onEdit: self.settings.setValue(f"groups/{idx}/on", w.text())
+            )
+            offEdit.editingFinished.connect(
+                lambda idx=i, w=offEdit: self.settings.setValue(f"groups/{idx}/off", w.text())
+            )
+
+            self.groupConfigs.append(
+                {"name": nameEdit, "on": onEdit, "off": offEdit, "button": toggleBtn}
+            )
+
+            row = i + 1
+            groupsLayout.addWidget(nameEdit, row, 0)
+            groupsLayout.addWidget(onEdit,   row, 1)
+            groupsLayout.addWidget(offEdit,  row, 2)
+            groupsLayout.addWidget(toggleBtn, row, 3)
+
 
         # ---- Bottom: two columns ----
         # Status
-        statusBox = QGroupBox("Status"); statusLayout = QGridLayout(statusBox)
-        statusLayout.addWidget(QLabel("Running:"), 0, 0); self.runningIndicator = QLabel(); self.runningIndicator.setFixedSize(16,16); statusLayout.addWidget(self.runningIndicator, 0, 1)
-        statusLayout.addWidget(QLabel("Run enable - Software:"), 1, 0); self.softwareRunEnable = QLabel(); self.softwareRunEnable.setFixedSize(16,16); statusLayout.addWidget(self.softwareRunEnable, 1, 1)
-        statusLayout.addWidget(QLabel("Run enable - Hardware:"), 2, 0); self.hardwareRunEnable = QLabel(); self.hardwareRunEnable.setFixedSize(16,16); statusLayout.addWidget(self.hardwareRunEnable, 2, 1)
-        statusLayout.addWidget(QLabel("Current address:"), 3, 0); self.currentAddrLabel = QLabel("—"); statusLayout.addWidget(self.currentAddrLabel, 3, 1)
-        statusLayout.addWidget(QLabel("Final address:"), 4, 0); self.finalAddrLabel = QLabel("—"); statusLayout.addWidget(self.finalAddrLabel, 4, 1)
-        statusLayout.addWidget(QLabel("Total run time:"), 5, 0); self.runTimeLabel = QLabel("—"); statusLayout.addWidget(self.runTimeLabel, 5, 1)
+        statusBox = QGroupBox("Status")
+        statusLayout = QGridLayout(statusBox)
+        statusLayout.addWidget(QLabel("Running:"), 0, 0)
+        self.runningIndicator = QLabel()
+        self.runningIndicator.setFixedSize(16, 16)
+        statusLayout.addWidget(self.runningIndicator, 0, 1)
+        statusLayout.addWidget(QLabel("Run enable - Software:"), 1, 0)
+        self.softwareRunEnable = QLabel()
+        self.softwareRunEnable.setFixedSize(16, 16)
+        statusLayout.addWidget(self.softwareRunEnable, 1, 1)
+        statusLayout.addWidget(QLabel("Run enable - Hardware:"), 2, 0)
+        self.hardwareRunEnable = QLabel()
+        self.hardwareRunEnable.setFixedSize(16, 16)
+        statusLayout.addWidget(self.hardwareRunEnable, 2, 1)
+        statusLayout.addWidget(QLabel("Current address:"), 3, 0)
+        self.currentAddrLabel = QLabel("—")
+        statusLayout.addWidget(self.currentAddrLabel, 3, 1)
+        statusLayout.addWidget(QLabel("Final address:"), 4, 0)
+        self.finalAddrLabel = QLabel("—")
+        statusLayout.addWidget(self.finalAddrLabel, 4, 1)
+        statusLayout.addWidget(QLabel("Total run time:"), 5, 0)
+        self.runTimeLabel = QLabel("—")
+        statusLayout.addWidget(self.runTimeLabel, 5, 1)
 
         # Synchronisation
-        syncBox = QGroupBox("Synchronisation"); syncLayout = QGridLayout(syncBox)
-        syncLayout.addWidget(QLabel("Reference Clock:"), 0, 0); self.refClockLabel = QLabel("—"); syncLayout.addWidget(self.refClockLabel, 0, 1)
-        syncLayout.addWidget(QLabel("Powerline frequency (Hz):"), 1, 0); self.freqLabel = QLabel("—"); syncLayout.addWidget(self.freqLabel, 1, 1)
+        syncBox = QGroupBox("Synchronisation")
+        syncLayout = QGridLayout(syncBox)
+        syncLayout.addWidget(QLabel("Reference Clock:"), 0, 0)
+        self.refClockLabel = QLabel("—")
+        syncLayout.addWidget(self.refClockLabel, 0, 1)
+        syncLayout.addWidget(QLabel("Powerline frequency (Hz):"), 1, 0)
+        self.freqLabel = QLabel("—")
+        syncLayout.addWidget(self.freqLabel, 1, 1)
 
         # Device info
-        infoBox = QGroupBox("Device info"); infoLayout = QGridLayout(infoBox)
-        infoLayout.addWidget(QLabel("Serial number:"), 0, 0); self.snLabel = QLabel("—"); infoLayout.addWidget(self.snLabel, 0, 1)
-        infoLayout.addWidget(QLabel("Device type:"), 1, 0); self.devTypeLabel = QLabel("—"); infoLayout.addWidget(self.devTypeLabel, 1, 1)
-        infoLayout.addWidget(QLabel("Firmware version:"), 2, 0); self.fwLabel = QLabel("—"); infoLayout.addWidget(self.fwLabel, 2, 1)
-        infoLayout.addWidget(QLabel("Hardware version:"), 3, 0); self.hwLabel = QLabel("—"); infoLayout.addWidget(self.hwLabel, 3, 1)
-        infoLayout.addWidget(QLabel("Port:"), 4, 0); self.portLabel = QLabel("—"); infoLayout.addWidget(self.portLabel, 4, 1)
+        infoBox = QGroupBox("Device info")
+        infoLayout = QGridLayout(infoBox)
+        infoLayout.addWidget(QLabel("Serial number:"), 0, 0)
+        self.snLabel = QLabel("—")
+        infoLayout.addWidget(self.snLabel, 0, 1)
+        infoLayout.addWidget(QLabel("Device type:"), 1, 0)
+        self.devTypeLabel = QLabel("—")
+        infoLayout.addWidget(self.devTypeLabel, 1, 1)
+        infoLayout.addWidget(QLabel("Firmware version:"), 2, 0)
+        self.fwLabel = QLabel("—")
+        infoLayout.addWidget(self.fwLabel, 2, 1)
+        infoLayout.addWidget(QLabel("Hardware version:"), 3, 0)
+        self.hwLabel = QLabel("—")
+        infoLayout.addWidget(self.hwLabel, 3, 1)
+        infoLayout.addWidget(QLabel("Port:"), 4, 0)
+        self.portLabel = QLabel("—")
+        infoLayout.addWidget(self.portLabel, 4, 1)
 
         # Trigger in
-        inBox = QGroupBox("Trigger in"); inLayout = QGridLayout(inBox)
+        inBox = QGroupBox("Trigger in")
+        inLayout = QGridLayout(inBox)
         inLayout.addWidget(QLabel("Accept hardware trigger:"), 0, 0)
-        self.acceptHwCombo = QComboBox(); self.acceptHwCombo.addItems(["never", "always", "single_run", "once"])
-        self.acceptHwCombo.currentTextChanged.connect(self.on_accept_hw_changed); inLayout.addWidget(self.acceptHwCombo, 0, 1)
+        self.acceptHwCombo = QComboBox()
+        self.acceptHwCombo.addItems(["never", "always", "single_run", "once"])
+        self.acceptHwCombo.currentTextChanged.connect(self.on_accept_hw_changed)
+        inLayout.addWidget(self.acceptHwCombo, 0, 1)
         inLayout.addWidget(QLabel("Wait for powerline:"), 1, 0)
-        self.waitCheckbox = QCheckBox(); self.waitCheckbox.stateChanged.connect(self.on_wait_changed); inLayout.addWidget(self.waitCheckbox, 1, 1)
+        self.waitCheckbox = QCheckBox()
+        self.waitCheckbox.stateChanged.connect(self.on_wait_changed)
+        inLayout.addWidget(self.waitCheckbox, 1, 1)
         inLayout.addWidget(QLabel("Delay after powerline (ms):"), 2, 0)
-        self.delaySpin = QDoubleSpinBox(); self.delaySpin.setDecimals(3); self.delaySpin.setRange(0.0, 10000.0)
-        self.delaySpin.valueChanged.connect(self.on_delay_changed); inLayout.addWidget(self.delaySpin, 2, 1)
+        self.delaySpin = QDoubleSpinBox()
+        self.delaySpin.setDecimals(3)
+        self.delaySpin.setRange(0.0, 10000.0)
+        self.delaySpin.valueChanged.connect(self.on_delay_changed)
+        inLayout.addWidget(self.delaySpin, 2, 1)
 
         # Trigger out
-        outBox = QGroupBox("Trigger out"); outLayout = QGridLayout(outBox)
+        outBox = QGroupBox("Trigger out")
+        outLayout = QGridLayout(outBox)
         outLayout.addWidget(QLabel("Duration (µs):"), 0, 0)
-        self.trigOutLenSpin = QDoubleSpinBox(); self.trigOutLenSpin.setDecimals(3); self.trigOutLenSpin.setRange(0.0, 10000.0)
-        self.trigOutLenSpin.valueChanged.connect(self.on_trigout_len_changed); outLayout.addWidget(self.trigOutLenSpin, 0, 1)
+        self.trigOutLenSpin = QDoubleSpinBox()
+        self.trigOutLenSpin.setDecimals(3)
+        self.trigOutLenSpin.setRange(0.0, 10000.0)
+        self.trigOutLenSpin.valueChanged.connect(self.on_trigout_len_changed)
+        outLayout.addWidget(self.trigOutLenSpin, 0, 1)
         outLayout.addWidget(QLabel("Delay (s):"), 1, 0)
-        self.trigOutDelaySpin = QDoubleSpinBox(); self.trigOutDelaySpin.setDecimals(3); self.trigOutDelaySpin.setRange(0.0, 10000.0)
-        self.trigOutDelaySpin.valueChanged.connect(self.on_trigout_delay_changed); outLayout.addWidget(self.trigOutDelaySpin, 1, 1)
-        
-        # self.triggerNowBtn = QPushButton("Trigger now"); self.triggerNowBtn.clicked.connect(lambda: self.pg.write_action(trigger_now=True))
-        # outLayout.addWidget(self.triggerNowBtn, 4, 0, 1, 2)
+        self.trigOutDelaySpin = QDoubleSpinBox()
+        self.trigOutDelaySpin.setDecimals(3)
+        self.trigOutDelaySpin.setRange(0.0, 10000.0)
+        self.trigOutDelaySpin.valueChanged.connect(self.on_trigout_delay_changed)
+        outLayout.addWidget(self.trigOutDelaySpin, 1, 1)
 
         # Notifications
-        notifBox = QGroupBox("Notifications"); notifLayout = QGridLayout(notifBox)
+        notifBox = QGroupBox("Notifications")
+        notifLayout = QGridLayout(notifBox)
         notifLayout.addWidget(QLabel("Notify when finished:"), 0, 0)
-        self.notifyFinishedCheckbox = QCheckBox(); self.notifyFinishedCheckbox.stateChanged.connect(self.on_notify_finished_changed)
+        self.notifyFinishedCheckbox = QCheckBox()
+        self.notifyFinishedCheckbox.stateChanged.connect(self.on_notify_finished_changed)
         notifLayout.addWidget(self.notifyFinishedCheckbox, 0, 1)
         notifLayout.addWidget(QLabel("Notify on main trig out:"), 1, 0)
-        self.notifyMainTrigOutCheckbox = QCheckBox(); self.notifyMainTrigOutCheckbox.stateChanged.connect(self.on_notify_main_trig_out_changed)
+        self.notifyMainTrigOutCheckbox = QCheckBox()
+        self.notifyMainTrigOutCheckbox.stateChanged.connect(self.on_notify_main_trig_out_changed)
         notifLayout.addWidget(self.notifyMainTrigOutCheckbox, 1, 1)
         notifLayout.addWidget(QLabel("Incoming Notifications"), 2, 0)
-        self.notifLog = QTextEdit(); self.notifLog.setReadOnly(True); notifLayout.addWidget(self.notifLog, 3, 0, 1, 2)
+        self.notifLog = QTextEdit()
+        self.notifLog.setReadOnly(True)
+        notifLayout.addWidget(self.notifLog, 3, 0, 1, 2)
 
         # Two columns
-        leftCol = QVBoxLayout(); leftCol.addWidget(statusBox); leftCol.addWidget(syncBox); leftCol.addWidget(infoBox); leftCol.addStretch(1)
-        rightCol = QVBoxLayout(); rightCol.addWidget(inBox); rightCol.addWidget(outBox); rightCol.addWidget(notifBox); rightCol.addStretch(1)
-        bottomCols = QHBoxLayout(); bottomCols.addLayout(leftCol, 1); bottomCols.addLayout(rightCol, 1)
+        leftCol = QVBoxLayout()
+        leftCol.addWidget(statusBox)
+        leftCol.addWidget(syncBox)
+        leftCol.addWidget(infoBox)
+        leftCol.addStretch(1)
+        rightCol = QVBoxLayout()
+        rightCol.addWidget(inBox)
+        rightCol.addWidget(outBox)
+        rightCol.addWidget(notifBox)
+        rightCol.addStretch(1)
+        bottomCols = QHBoxLayout()
+        bottomCols.addLayout(leftCol, 1)
+        bottomCols.addLayout(rightCol, 1)
 
         # Central layout
         centralLayout = QVBoxLayout()
         centralLayout.addWidget(self.deviceComboBox)
         centralLayout.addWidget(manualBox)
+        centralLayout.addWidget(groupsBox)
         centralLayout.addLayout(bottomCols)
-        # central = QWidget(); central.setLayout(centralLayout); self.setCentralWidget(central)
+
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -427,39 +614,123 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(scroll)
 
-
         # Timer
-        self.request_timer = QTimer(self); self.request_timer.setInterval(self.POLL_MS); self.request_timer.timeout.connect(self.poll_status)
+        self.request_timer = QTimer(self)
+        self.request_timer.setInterval(self.POLL_MS)
+        self.request_timer.timeout.connect(self.poll_status)
 
+        # Initial device scan
         self.check_devices()
+
+        # If exactly one device is present at startup, auto-connect to it
+        if self.deviceComboBox.count() == 1:
+            self.connect_device()
+
 
     # Helpers
     @staticmethod
     def _set_indicator(widget: QLabel, on: bool):
-        widget.setStyleSheet("background-color: green; border-radius: 8px;" if on else "background-color: red; border-radius: 8px;")
+        widget.setStyleSheet(
+            "background-color: green; border-radius: 8px;"
+            if on
+            else "background-color: red; border-radius: 8px;"
+        )
 
-    def _state_to_bools(self, state_val: int) -> List[bool]:
-        return [bool((state_val >> i) & 1) for i in range(24)]
+    def _state_to_bools(self, state_val) -> List[bool]:
+        """
+        Convert the 'state' field from decode_devicestate into a 24-element bool list.
+
+        decode_devicestate currently returns a NumPy array of bits, but we also
+        support an int bitfield for robustness.
+        """
+        if isinstance(state_val, int):
+            return [bool((state_val >> i) & 1) for i in range(24)]
+        # assume iterable / NumPy array
+        return [bool(state_val[i]) for i in range(24)]
 
     def _apply_state_to_buttons(self, state_bools: List[bool]):
         for i, (_, btn) in enumerate(self.channelWidgets):
-            old = btn.blockSignals(True); btn.setChecked(bool(state_bools[i])); btn.blockSignals(old)
+            old = btn.blockSignals(True)
+            btn.setChecked(bool(state_bools[i]))
+            btn.blockSignals(old)
 
-    # Global manual control handlers
-    def set_all_on(self):
-        for _, btn in self.channelWidgets:
-            btn.setChecked(True)
+    def parse_channel_list(self, text: str) -> set[int]:
+        """
+        Parse a string like "0,1,4-7" into a set of valid channel indices.
+        Ignores invalid entries and clamps to available channels.
+        """
+        result: set[int] = set()
+        text = text.strip()
+        if not text:
+            return result
+
+        parts = text.replace(" ", "").split(",")
+        n_channels = len(self.channelWidgets)
+
+        for part in parts:
+            if not part:
+                continue
+            if "-" in part:
+                # Range like 3-7
+                try:
+                    start_str, end_str = part.split("-", 1)
+                    start = int(start_str)
+                    end = int(end_str)
+                except ValueError:
+                    continue
+                if start > end:
+                    start, end = end, start
+                for i in range(start, end + 1):
+                    if 0 <= i < n_channels:
+                        result.add(i)
+            else:
+                # Single index
+                try:
+                    idx = int(part)
+                except ValueError:
+                    continue
+                if 0 <= idx < n_channels:
+                    result.add(idx)
+
+        return result
+    
+    def on_group_toggled(self, index: int, on: bool):
+        """
+        When a group is toggled:
+          - If 'on' is True:
+                channels in ON list  -> HIGH
+                channels in OFF list -> LOW
+          - If 'on' is False:
+                channels in ON list  -> LOW
+                channels in OFF list -> HIGH
+          Other channels are left unchanged.
+        """
+        cfg = self.groupConfigs[index]
+        on_set = self.parse_channel_list(cfg["on"].text())
+        off_set = self.parse_channel_list(cfg["off"].text())
+
+        # Update button label to show state (optional but nice)
+        btn = cfg["button"]
+        btn.setText("On" if on else "Off")
+
+        # Apply pattern only to channels under this group's control
+        for i, (_, chan_btn) in enumerate(self.channelWidgets):
+            if i in on_set:
+                old = chan_btn.blockSignals(True)
+                chan_btn.setChecked(on)
+                chan_btn.blockSignals(old)
+            elif i in off_set:
+                old = chan_btn.blockSignals(True)
+                chan_btn.setChecked(not on)
+                chan_btn.blockSignals(old)
+            # else: untouched
+
+        # Push new state to the device
         self.send_static_state()
 
-    def set_all_off(self):
-        for _, btn in self.channelWidgets:
-            btn.setChecked(False)
-        self.send_static_state()
+        name = cfg["name"].text() or f"Group {index+1}"
+        self.statusBar().showMessage(f"Group '{name}' turned {'ON' if on else 'OFF'}", 2000)
 
-    def invert_all(self):
-        for _, btn in self.channelWidgets:
-            btn.setChecked(not btn.isChecked())
-        self.send_static_state()
 
     def send_static_state(self):
         state = [btn.isChecked() for _, btn in self.channelWidgets]
@@ -473,6 +744,7 @@ class MainWindow(QMainWindow):
     def make_toggle_handler(self, channel: int):
         def handler(checked: bool):
             self.send_static_state()
+
         return handler
 
     def on_accept_hw_changed(self, text: str):
@@ -490,7 +762,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Error: {e}", 3000)
 
     def on_delay_changed(self, value: float):
-        value_clock_cycles = int(round(value*1e-3/10e-9))
+        # UI uses ms; device uses 10 ns ticks
+        value_clock_cycles = int(round(value * 1e-3 / 10e-9))
         try:
             self.pg.write_powerline_trigger_options(powerline_trigger_delay=value_clock_cycles)
             self.statusBar().showMessage("Updated powerline delay", 1000)
@@ -512,7 +785,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Error: {e}", 3000)
 
     def on_trigout_len_changed(self, value: float):
-        value_clock_cycles = int(round(value*1e-6/10e-9))
+        # UI uses microseconds; device uses 10 ns ticks
+        value_clock_cycles = int(round(value * 1e-6 / 10e-9))
         try:
             self.pg.write_device_options(trigger_out_length=value_clock_cycles)
             self.statusBar().showMessage("Updated trig out length", 1000)
@@ -520,7 +794,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Error: {e}", 3000)
 
     def on_trigout_delay_changed(self, value: float):
-        value_clock_cycles = int(round(value/10e-9))
+        # UI uses seconds; device uses 10 ns ticks
+        value_clock_cycles = int(round(value / 10e-9))
         try:
             self.pg.write_device_options(trigger_out_delay=value_clock_cycles)
             self.statusBar().showMessage("Updated trig out delay", 1000)
@@ -530,7 +805,7 @@ class MainWindow(QMainWindow):
     # Connection actions
     def check_devices(self):
         try:
-            devs = self.pg.get_connected_devices().get('validated_devices', [])
+            devs = self.pg.get_connected_devices().get("validated_devices", [])
             self.deviceComboBox.clear()
             for d in devs:
                 label = f"SN {d.get('serial_number')} | FW {d.get('firmware_version')} | {d.get('comport')}"
@@ -542,18 +817,19 @@ class MainWindow(QMainWindow):
     def connect_device(self):
         idx = self.deviceComboBox.currentIndex()
         if idx < 0:
-            QMessageBox.warning(self, "Connect", "No device selected."); return
+            QMessageBox.warning(self, "Connect", "No device selected.")
+            return
         dev = self.deviceComboBox.itemData(idx)
         try:
-            ok = self.pg.connect(serial_number=dev.get('serial_number'))
+            ok = self.pg.connect(serial_number=dev.get("serial_number"))
             if ok:
                 self.statusBar().showMessage("Connected", 2000)
                 self.connStatusLabel.setText(f"Connected: {dev.get('comport')}")
-                self.portLabel.setText(str(dev.get('comport')))
-                self.snLabel.setText(str(dev.get('serial_number')))
-                self.devTypeLabel.setText(str(dev.get('device_type')))
-                self.fwLabel.setText(str(dev.get('firmware_version')))
-                self.hwLabel.setText(str(dev.get('hardware_version')))
+                self.portLabel.setText(str(dev.get("comport")))
+                self.snLabel.setText(str(dev.get("serial_number")))
+                self.devTypeLabel.setText(str(dev.get("device_type")))
+                self.fwLabel.setText(str(dev.get("firmware_version")))
+                self.hwLabel.setText(str(dev.get("hardware_version")))
                 self.request_timer.start()
             else:
                 self.statusBar().showMessage("Connect failed: device not found.", 4000)
@@ -562,14 +838,17 @@ class MainWindow(QMainWindow):
 
     def disconnect_device(self):
         try:
-            self.request_timer.stop(); self.pg.disconnect()
+            self.request_timer.stop()
+            self.pg.disconnect()
             self.statusBar().showMessage("Disconnected", 2000)
-            self.connStatusLabel.setText("Disconnected"); self.portLabel.setText("—")
+            self.connStatusLabel.setText("Disconnected")
+            self.portLabel.setText("—")
         except Exception as e:
             self.statusBar().showMessage(f"Error disconnecting: {e}", 5000)
 
     def poll_status(self):
-        if not self.pg.is_open(): return
+        if not self.pg.is_open():
+            return
         try:
             self.pg.write_action(request_state=True, request_powerline_state=True, request_state_extras=True)
         except Exception as e:
@@ -578,11 +857,13 @@ class MainWindow(QMainWindow):
     # Worker slots
     def on_connected(self, port: str):
         self.statusBar().showMessage(f"Connected on {port}", 3000)
-        self.connStatusLabel.setText(f"Connected: {port}"); self.portLabel.setText(port)
+        self.connStatusLabel.setText(f"Connected: {port}")
+        self.portLabel.setText(port)
 
     def on_disconnected(self):
         self.statusBar().showMessage("Disconnected", 3000)
-        self.connStatusLabel.setText("Disconnected"); self.portLabel.setText("—")
+        self.connStatusLabel.setText("Disconnected")
+        self.portLabel.setText("—")
 
     def on_error(self, message: str):
         self.statusBar().showMessage(f"ERROR: {message}", 5000)
@@ -591,68 +872,117 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Dropped byte id {msg_id} at {ts:.3f}", 2000)
 
     def on_echo(self, msg: dict):
-        if 'serial_number' in msg: self.snLabel.setText(str(msg.get('serial_number')))
-        if 'device_type' in msg: self.devTypeLabel.setText(str(msg.get('device_type')))
-        if 'firmware_version' in msg: self.fwLabel.setText(str(msg.get('firmware_version')))
-        if 'hardware_version' in msg: self.hwLabel.setText(str(msg.get('hardware_version')))
+        # decode_echo always provides these keys
+        self.snLabel.setText(str(msg["serial_number"]))
+        self.devTypeLabel.setText(str(msg["device_type"]))
+        self.fwLabel.setText(str(msg["firmware_version"]))
+        self.hwLabel.setText(str(msg["hardware_version"]))
+
+    def on_internal_error(self, msg: dict):
+        # An internal error occoured in the pulse generator.
+        text = f"Internal error: {msg}"
+        self.statusBar().showMessage(text, 10000)
+        self.notifLog.append(text)
 
     def on_easyprint(self, msg: dict):
-        self.statusBar().showMessage(str(msg.get('easy_printed_value', msg)), 3000)
+        # decode_easyprint always returns 'easy_printed_value'
+        self.statusBar().showMessage(str(msg["easy_printed_value"]), 3000)
 
     def on_notification(self, msg: dict):
+        # decode_notification returns: address, address_notify, trigger_notify,
+        # finished_notify, run_time. For now just log the dict.
         self.notifLog.append(str(msg))
 
     def on_powerlinestate(self, msg: dict):
-        freq = msg.get('powerline_freq_hz'); 
-        if freq is not None:
-            try: self.freqLabel.setText(f"{float(freq):.3f}")
-            except Exception: self.freqLabel.setText(str(freq))
+        # decode_powerlinestate returns:
+        # 'trig_on_powerline', 'powerline_locked', 'powerline_period', 'powerline_trigger_delay'
+        period_cycles = msg["powerline_period"]
+        delay_cycles = msg["powerline_trigger_delay"]
+        trig_on_powerline = msg["trig_on_powerline"]
 
+        # Update powerline frequency label (period is in 10 ns clock cycles)
+        if period_cycles:
+            freq_hz = 1.0 / (period_cycles * 10e-9)
+            self.freqLabel.setText(f"{freq_hz:.3f}")
+        else:
+            self.freqLabel.setText("—")
+
+        # Update "wait for powerline" checkbox from trig_on_powerline
+        old = self.waitCheckbox.blockSignals(True)
+        self.waitCheckbox.setChecked(bool(trig_on_powerline))
+        self.waitCheckbox.blockSignals(old)
+
+        # Update delay spinbox in ms from powerline_trigger_delay (10 ns cycles)
+        delay_ms = delay_cycles * 1e-5  # 10 ns * 1e3 ms/s = 1e-5
+        old = self.delaySpin.blockSignals(True)
+        self.delaySpin.setValue(float(delay_ms))
+        self.delaySpin.blockSignals(old)
 
     def on_devicestate_extras(self, msg: dict):
-        maybe_time = msg.get('total_run_time')
-        if maybe_time is not None: self.runTimeLabel.setText(f"{maybe_time}")
+        # decode_devicestate_extras returns 'run_time'
+        run_time = msg["run_time"]
+        self.runTimeLabel.setText(f"{run_time}")
 
     def on_devicestate(self, ds: dict):
-        self._set_indicator(self.runningIndicator, bool(ds.get('running')))
-        self._set_indicator(self.softwareRunEnable, bool(ds.get('software_run_enable')))
-        self._set_indicator(self.hardwareRunEnable, bool(ds.get('hardware_run_enable')))
-        if 'current_address' in ds: self.currentAddrLabel.setText(str(ds['current_address']))
-        if 'final_address' in ds: self.finalAddrLabel.setText(str(ds['final_address']))
-        if 'accept_hardware_trigger' in ds:
-            val = str(ds['accept_hardware_trigger'])
-            idx = self.acceptHwCombo.findText(val)
-            if idx >= 0:
-                old = self.acceptHwCombo.blockSignals(True); self.acceptHwCombo.setCurrentIndex(idx); self.acceptHwCombo.blockSignals(old)
-        if 'trigger_on_powerline' in ds:
-            old = self.waitCheckbox.blockSignals(True); self.waitCheckbox.setChecked(bool(ds['trigger_on_powerline'])); self.waitCheckbox.blockSignals(old)
-        if 'powerline_trigger_delay' in ds:
-            old = self.delaySpin.blockSignals(True); self.delaySpin.setValue(float(ds['powerline_trigger_delay'])); self.delaySpin.blockSignals(old)
-        if 'notify_when_run_finished' in ds:
-            old = self.notifyFinishedCheckbox.blockSignals(True); self.notifyFinishedCheckbox.setChecked(bool(ds['notify_when_run_finished'])); self.notifyFinishedCheckbox.blockSignals(old)
-        if 'notify_on_main_trig_out' in ds:
-            old = self.notifyMainTrigOutCheckbox.blockSignals(True); self.notifyMainTrigOutCheckbox.setChecked(bool(ds['notify_on_main_trig_out'])); self.notifyMainTrigOutCheckbox.blockSignals(old)
-        if 'clock_source' in ds:
-            self.refClockLabel.setText(f"{ds['clock_source']}")
-        if 'trigger_out_length' in ds:
-            old = self.trigOutLenSpin.blockSignals(True); self.trigOutLenSpin.setValue(float(ds['trigger_out_length'])); self.trigOutLenSpin.blockSignals(old)
-        if 'trigger_out_delay' in ds:
-            old = self.trigOutDelaySpin.blockSignals(True); self.trigOutDelaySpin.setValue(float(ds['trigger_out_delay'])); self.trigOutDelaySpin.blockSignals(old)
-        if 'state' in ds and isinstance(ds['state'], int):
-            self._apply_state_to_buttons(self._state_to_bools(ds['state']))
-        ### Can get rif of all the if --- in statements. I know the form of the dictionary. It ALWAYS contains the same emenets.
+        # decode_devicestate returns a fixed set of keys; no need for existence checks
+        self._set_indicator(self.runningIndicator, bool(ds["running"]))
+        self._set_indicator(self.softwareRunEnable, bool(ds["software_run_enable"]))
+        self._set_indicator(self.hardwareRunEnable, bool(ds["hardware_run_enable"]))
+
+        self.currentAddrLabel.setText(str(ds["current_address"]))
+        self.finalAddrLabel.setText(str(ds["final_address"]))
+
+        # Accept hardware trigger combo
+        val = str(ds["accept_hardware_trigger"])
+        idx = self.acceptHwCombo.findText(val)
+        if idx >= 0:
+            old = self.acceptHwCombo.blockSignals(True)
+            self.acceptHwCombo.setCurrentIndex(idx)
+            self.acceptHwCombo.blockSignals(old)
+
+        # Reference clock source
+        self.refClockLabel.setText(f"{ds['clock_source']}")
+
+        # Notification checkboxes (note naming from decode_devicestate)
+        old = self.notifyFinishedCheckbox.blockSignals(True)
+        self.notifyFinishedCheckbox.setChecked(bool(ds["notify_on_run_finished"]))
+        self.notifyFinishedCheckbox.blockSignals(old)
+
+        old = self.notifyMainTrigOutCheckbox.blockSignals(True)
+        self.notifyMainTrigOutCheckbox.setChecked(bool(ds["notify_on_main_trig_out"]))
+        self.notifyMainTrigOutCheckbox.blockSignals(old)
+
+        # Trigger out timing widgets: convert FPGA units (10 ns cycles) back to UI units
+        # trigger_out_length is in 10 ns cycles; UI uses microseconds
+        trig_len_cycles = ds["trigger_out_length"]
+        trig_len_us = float(trig_len_cycles) * 1e-2  # 10 ns * 1e6 us/s = 1e-2
+        old = self.trigOutLenSpin.blockSignals(True)
+        self.trigOutLenSpin.setValue(trig_len_us)
+        self.trigOutLenSpin.blockSignals(old)
+
+        # trigger_out_delay is in 10 ns cycles; UI uses seconds
+        trig_delay_cycles = ds["trigger_out_delay"]
+        trig_delay_s = float(trig_delay_cycles) * 10e-9
+        old = self.trigOutDelaySpin.blockSignals(True)
+        self.trigOutDelaySpin.setValue(trig_delay_s)
+        self.trigOutDelaySpin.blockSignals(old)
+
+        # Output state -> manual buttons
+        self._apply_state_to_buttons(self._state_to_bools(ds["state"]))
 
     def closeEvent(self, ev):
         try:
             self.request_timer.stop()
-            if self.pg and self.pg.is_open(): self.pg.disconnect()
+            if self.pg and self.pg.is_open():
+                self.pg.disconnect()
         finally:
             super().closeEvent(ev)
 
 
 def main():
     app = QApplication(sys.argv)
-    w = MainWindow(); w.show()
+    w = MainWindow()
+    w.show()
     sys.exit(app.exec_())
 
 
