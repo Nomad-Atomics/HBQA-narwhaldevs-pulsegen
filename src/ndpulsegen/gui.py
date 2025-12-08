@@ -419,16 +419,18 @@ class MainWindow(QMainWindow):
         manualLayout = QVBoxLayout(manualBox)
         manualLayout.addLayout(channelGrid)
 
+        # ---- Channel groups (pattern presets) ----
         groupsBox = QGroupBox("Channel groups")
         groupsLayout = QGridLayout(groupsBox)
         self.groupConfigs = []
 
         # Header row
-        groupsLayout.addWidget(QLabel("Name"),           0, 0)
-        groupsLayout.addWidget(QLabel("On channels"),    0, 1)
-        groupsLayout.addWidget(QLabel("Off channels"),   0, 2)
-        groupsLayout.addWidget(QLabel("On/Off"),         0, 3)   # label change
+        groupsLayout.addWidget(QLabel("Name"),         0, 0)
+        groupsLayout.addWidget(QLabel("Active High"),  0, 1)
+        groupsLayout.addWidget(QLabel("Active Low"),   0, 2)
+        groupsLayout.addWidget(QLabel("Actions"),      0, 3)
 
+        # Make e.g. 4 groups
         for i in range(4):
             nameEdit = QLineEdit()
             nameEdit.setPlaceholderText(f"Group {i+1}")
@@ -436,44 +438,64 @@ class MainWindow(QMainWindow):
             if saved_name is not None:
                 nameEdit.setText(saved_name)
 
-            onEdit = QLineEdit()
-            onEdit.setPlaceholderText("e.g. 0,1,5-7")
+            activeHighEdit = QLineEdit()
+            activeHighEdit.setPlaceholderText("e.g. 0,1,5-7")
             saved_on = self.settings.value(f"groups/{i}/on", "")
             if saved_on is not None:
-                onEdit.setText(saved_on)
+                activeHighEdit.setText(saved_on)
 
-            offEdit = QLineEdit()
-            offEdit.setPlaceholderText("e.g. 2,3")
+            activeLowEdit = QLineEdit()
+            activeLowEdit.setPlaceholderText("e.g. 2,3")
             saved_off = self.settings.value(f"groups/{i}/off", "")
             if saved_off is not None:
-                offEdit.setText(saved_off)
+                activeLowEdit.setText(saved_off)
 
-            # Toggle button instead of one-shot Apply
-            toggleBtn = QPushButton("Off")
-            toggleBtn.setCheckable(True)
-            toggleBtn.setChecked(False)
-            toggleBtn.toggled.connect(lambda checked, idx=i: self.on_group_toggled(idx, checked))
+            # Two momentary buttons: Activate / Deactivate
+            actionsWidget = QWidget()
+            actionsLayout = QHBoxLayout(actionsWidget)
+            actionsLayout.setContentsMargins(0, 0, 0, 0)
+            actionsLayout.setSpacing(4)
+
+            activateBtn = QPushButton("Activate")
+            deactivateBtn = QPushButton("Deactivate")
+
+            activateBtn.clicked.connect(
+                lambda _, idx=i: self.on_group_action(idx, True)
+            )
+            deactivateBtn.clicked.connect(
+                lambda _, idx=i: self.on_group_action(idx, False)
+            )
+
+            actionsLayout.addWidget(activateBtn)
+            actionsLayout.addWidget(deactivateBtn)
 
             # Persist text fields
             nameEdit.editingFinished.connect(
                 lambda idx=i, w=nameEdit: self.settings.setValue(f"groups/{idx}/name", w.text())
             )
-            onEdit.editingFinished.connect(
-                lambda idx=i, w=onEdit: self.settings.setValue(f"groups/{idx}/on", w.text())
+            activeHighEdit.editingFinished.connect(
+                lambda idx=i, w=activeHighEdit: self.settings.setValue(f"groups/{idx}/on", w.text())
             )
-            offEdit.editingFinished.connect(
-                lambda idx=i, w=offEdit: self.settings.setValue(f"groups/{idx}/off", w.text())
+            activeLowEdit.editingFinished.connect(
+                lambda idx=i, w=activeLowEdit: self.settings.setValue(f"groups/{idx}/off", w.text())
             )
 
             self.groupConfigs.append(
-                {"name": nameEdit, "on": onEdit, "off": offEdit, "button": toggleBtn}
+                {
+                    "name": nameEdit,
+                    "on": activeHighEdit,
+                    "off": activeLowEdit,
+                    "activate": activateBtn,
+                    "deactivate": deactivateBtn,
+                }
             )
 
             row = i + 1
-            groupsLayout.addWidget(nameEdit, row, 0)
-            groupsLayout.addWidget(onEdit,   row, 1)
-            groupsLayout.addWidget(offEdit,  row, 2)
-            groupsLayout.addWidget(toggleBtn, row, 3)
+            groupsLayout.addWidget(nameEdit,      row, 0)
+            groupsLayout.addWidget(activeHighEdit, row, 1)
+            groupsLayout.addWidget(activeLowEdit,  row, 2)
+            groupsLayout.addWidget(actionsWidget,  row, 3)
+
 
 
         # ---- Bottom: two columns ----
@@ -654,7 +676,7 @@ class MainWindow(QMainWindow):
             btn.setChecked(bool(state_bools[i]))
             btn.blockSignals(old)
 
-    def parse_channel_list(self, text: str) -> set[int]:
+    def parse_channel_list(self, text: str) -> set:
         """
         Parse a string like "0,1,4-7" into a set of valid channel indices.
         Ignores invalid entries and clamps to available channels.
@@ -694,42 +716,41 @@ class MainWindow(QMainWindow):
 
         return result
     
-    def on_group_toggled(self, index: int, on: bool):
+    def on_group_action(self, index: int, activate: bool):
         """
-        When a group is toggled:
-          - If 'on' is True:
-                channels in ON list  -> HIGH
-                channels in OFF list -> LOW
-          - If 'on' is False:
-                channels in ON list  -> LOW
-                channels in OFF list -> HIGH
-          Other channels are left unchanged.
+        Momentary group action.
+
+        - If activate=True  ("Activate" button):
+              channels in Active High list -> HIGH
+              channels in Active Low list  -> LOW
+        - If activate=False ("Deactivate" button):
+              channels in Active High list -> LOW
+              channels in Active Low list  -> HIGH
+
+        All other channels are left unchanged.
         """
         cfg = self.groupConfigs[index]
-        on_set = self.parse_channel_list(cfg["on"].text())
-        off_set = self.parse_channel_list(cfg["off"].text())
+        active_high = self.parse_channel_list(cfg["on"].text())
+        active_low = self.parse_channel_list(cfg["off"].text())
 
-        # Update button label to show state (optional but nice)
-        btn = cfg["button"]
-        btn.setText("On" if on else "Off")
-
-        # Apply pattern only to channels under this group's control
         for i, (_, chan_btn) in enumerate(self.channelWidgets):
-            if i in on_set:
+            # Channels explicitly listed in this group are controlled; others untouched.
+            if i in active_high:
                 old = chan_btn.blockSignals(True)
-                chan_btn.setChecked(on)
+                chan_btn.setChecked(activate)   # high on activate, low on deactivate
                 chan_btn.blockSignals(old)
-            elif i in off_set:
+            elif i in active_low:
                 old = chan_btn.blockSignals(True)
-                chan_btn.setChecked(not on)
+                chan_btn.setChecked(not activate)  # low on activate, high on deactivate
                 chan_btn.blockSignals(old)
-            # else: untouched
 
-        # Push new state to the device
         self.send_static_state()
 
         name = cfg["name"].text() or f"Group {index+1}"
-        self.statusBar().showMessage(f"Group '{name}' turned {'ON' if on else 'OFF'}", 2000)
+        self.statusBar().showMessage(
+            f"Group '{name}' {'activated' if activate else 'deactivated'}",
+            2000,
+        )
 
 
     def send_static_state(self):
