@@ -4,6 +4,7 @@ import struct
 import time
 import threading
 from typing import Optional, List, Dict, Any
+import json
 
 from PyQt5.QtCore import (
     Qt, QObject, QThread, pyqtSignal, QTimer, QSettings, QSize
@@ -11,8 +12,10 @@ from PyQt5.QtCore import (
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QComboBox, QLabel, QAction, QToolBar, QGroupBox, QCheckBox,
-    QTextEdit, QDoubleSpinBox, QLineEdit, QMessageBox, QScrollArea
+    QTextEdit, QDoubleSpinBox, QLineEdit, QMessageBox, QScrollArea, QFrame,
+    QSizePolicy,
 )
+
 
 import serial
 import serial.tools.list_ports
@@ -419,82 +422,93 @@ class MainWindow(QMainWindow):
         manualLayout = QVBoxLayout(manualBox)
         manualLayout.addLayout(channelGrid)
 
-        # ---- Channel groups (pattern presets) ----
-        groupsBox = QGroupBox("Channel groups")
-        groupsLayout = QGridLayout(groupsBox)
-        self.groupConfigs = []
+        # ---- Channel groups (pattern presets, dynamic) ----
+        self.groupConfigs = []  # list of dicts describing each group row
 
-        # Header row
-        groupsLayout.addWidget(QLabel("Name"),         0, 0)
-        groupsLayout.addWidget(QLabel("Active High"),  0, 1)
-        groupsLayout.addWidget(QLabel("Active Low"),   0, 2)
-        groupsLayout.addWidget(QLabel("Actions"),      0, 3)
+        self.groupsBox = QGroupBox("Channel groups")
+        groupsLayout = QVBoxLayout(self.groupsBox)
 
-        # Make e.g. 4 groups
-        for i in range(4):
-            nameEdit = QLineEdit()
-            nameEdit.setPlaceholderText(f"Group {i+1}")
-            saved_name = self.settings.value(f"groups/{i}/name", "")
-            if saved_name is not None:
-                nameEdit.setText(saved_name)
+        header = QWidget()
+        headerLayout = QHBoxLayout(header)
+        headerLayout.setContentsMargins(0, 0, 0, 0)
+        headerLayout.setSpacing(8)
 
-            activeHighEdit = QLineEdit()
-            activeHighEdit.setPlaceholderText("e.g. 0,1,5-7")
-            saved_on = self.settings.value(f"groups/{i}/on", "")
-            if saved_on is not None:
-                activeHighEdit.setText(saved_on)
+        # Column 0: Name
+        lblName = QLabel("Name")
+        lblName.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        headerLayout.addWidget(lblName)
 
-            activeLowEdit = QLineEdit()
-            activeLowEdit.setPlaceholderText("e.g. 2,3")
-            saved_off = self.settings.value(f"groups/{i}/off", "")
-            if saved_off is not None:
-                activeLowEdit.setText(saved_off)
+        # Column 1: Active High
+        lblHigh = QLabel("Active High")
+        lblHigh.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        headerLayout.addWidget(lblHigh)
 
-            # Two momentary buttons: Activate / Deactivate
-            actionsWidget = QWidget()
-            actionsLayout = QHBoxLayout(actionsWidget)
-            actionsLayout.setContentsMargins(0, 0, 0, 0)
-            actionsLayout.setSpacing(4)
+        # Column 2: Active Low
+        lblLow = QLabel("Active Low")
+        lblLow.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        headerLayout.addWidget(lblLow)
 
-            activateBtn = QPushButton("Activate")
-            deactivateBtn = QPushButton("Deactivate")
+        # Column 3: placeholder over Actions (Activate/Deactivate)
+        headerLayout.addWidget(QWidget())
 
-            activateBtn.clicked.connect(
-                lambda _, idx=i: self.on_group_action(idx, True)
-            )
-            deactivateBtn.clicked.connect(
-                lambda _, idx=i: self.on_group_action(idx, False)
-            )
+        # Column 4: vertical separator, aligned with row separators
+        sepHeader = QFrame()
+        sepHeader.setFrameShape(QFrame.VLine)
+        sepHeader.setFrameShadow(QFrame.Sunken)
+        headerLayout.addWidget(sepHeader)
 
-            actionsLayout.addWidget(activateBtn)
-            actionsLayout.addWidget(deactivateBtn)
+        # Column 5: placeholder over Remove button
+        headerLayout.addWidget(QWidget())
 
-            # Persist text fields
-            nameEdit.editingFinished.connect(
-                lambda idx=i, w=nameEdit: self.settings.setValue(f"groups/{idx}/name", w.text())
-            )
-            activeHighEdit.editingFinished.connect(
-                lambda idx=i, w=activeHighEdit: self.settings.setValue(f"groups/{idx}/on", w.text())
-            )
-            activeLowEdit.editingFinished.connect(
-                lambda idx=i, w=activeLowEdit: self.settings.setValue(f"groups/{idx}/off", w.text())
-            )
+        # Make the first three columns share space evenly
+        headerLayout.setStretch(0, 1)
+        headerLayout.setStretch(1, 1)
+        headerLayout.setStretch(2, 1)
+        headerLayout.setStretch(3, 0)
+        headerLayout.setStretch(4, 0)
+        headerLayout.setStretch(5, 0)
 
-            self.groupConfigs.append(
-                {
-                    "name": nameEdit,
-                    "on": activeHighEdit,
-                    "off": activeLowEdit,
-                    "activate": activateBtn,
-                    "deactivate": deactivateBtn,
-                }
-            )
+        groupsLayout.addWidget(header)
 
-            row = i + 1
-            groupsLayout.addWidget(nameEdit,      row, 0)
-            groupsLayout.addWidget(activeHighEdit, row, 1)
-            groupsLayout.addWidget(activeLowEdit,  row, 2)
-            groupsLayout.addWidget(actionsWidget,  row, 3)
+        # Container for group rows
+        self.groupsContainer = QVBoxLayout()
+        self.groupsContainer.setSpacing(4)
+        groupsLayout.addLayout(self.groupsContainer)
+
+        # "Add group" aligned with Remove column at the bottom
+        addRow = QWidget()
+        addRowLayout = QHBoxLayout(addRow)
+        addRowLayout.setContentsMargins(0, 0, 0, 0)
+        addRowLayout.setSpacing(4)
+
+        # Empty spacers for: Name, Active High, Active Low, Actions
+        addRowLayout.addStretch(1)  # Name
+        addRowLayout.addStretch(1)  # Active High
+        addRowLayout.addStretch(1)  # Active Low
+        addRowLayout.addStretch(1)  # Actions
+
+        # Vertical separator in the bottom row, aligned with header’s separator
+        sepBottom = QFrame()
+        sepBottom.setFrameShape(QFrame.VLine)
+        sepBottom.setFrameShadow(QFrame.Sunken)
+        addRowLayout.addWidget(sepBottom)
+
+        # Add-group button in the "Remove" column
+        addGroupBtn = QPushButton("Add group")
+        addGroupBtn.clicked.connect(self.add_group)
+
+        # Use Add group as the width reference for Remove buttons
+        addGroupBtn.adjustSize()
+        self.groupButtonWidth = addGroupBtn.width()
+        addGroupBtn.setFixedWidth(self.groupButtonWidth)
+
+
+        addRowLayout.addWidget(addGroupBtn)
+
+        groupsLayout.addWidget(addRow)
+
+        # Load saved groups
+        self.load_groups_from_settings()
 
 
 
@@ -623,8 +637,9 @@ class MainWindow(QMainWindow):
         centralLayout = QVBoxLayout()
         centralLayout.addWidget(self.deviceComboBox)
         centralLayout.addWidget(manualBox)
-        centralLayout.addWidget(groupsBox)
+        centralLayout.addWidget(self.groupsBox)
         centralLayout.addLayout(bottomCols)
+
 
 
         scroll = QScrollArea()
@@ -676,12 +691,186 @@ class MainWindow(QMainWindow):
             btn.setChecked(bool(state_bools[i]))
             btn.blockSignals(old)
 
+    def _make_header_label(self, text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        return lbl
+
+
+    def add_group(self, name: str = "", active_high: str = "", active_low: str = ""):
+        """
+        Create a new group row in the UI and register it in self.groupConfigs.
+        """
+        row_widget = QWidget()
+        layout = QHBoxLayout(row_widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        # Name
+        nameEdit = QLineEdit()
+        nameEdit.setPlaceholderText("Group")
+        if name:
+            nameEdit.setText(name)
+
+        # Active High
+        activeHighEdit = QLineEdit()
+        activeHighEdit.setPlaceholderText("e.g. 0,1,5-7")
+        if active_high:
+            activeHighEdit.setText(active_high)
+
+        # Active Low
+        activeLowEdit = QLineEdit()
+        activeLowEdit.setPlaceholderText("e.g. 2,3")
+        if active_low:
+            activeLowEdit.setText(active_low)
+
+        # Buttons: Activate, Deactivate
+        activateBtn = QPushButton("Activate")
+        deactivateBtn = QPushButton("Deactivate")
+
+        # Remove button in its own "Remove" column
+        removeBtn = QPushButton("Remove")
+
+        # Match width to the Add group button
+        if hasattr(self, "groupButtonWidth"):
+            removeBtn.setFixedWidth(self.groupButtonWidth)
+
+        # Wire actions: identify row by widget, not index
+        activateBtn.clicked.connect(
+            lambda _, w=row_widget: self.on_group_action(w, True)
+        )
+        deactivateBtn.clicked.connect(
+            lambda _, w=row_widget: self.on_group_action(w, False)
+        )
+        removeBtn.clicked.connect(
+            lambda _, w=row_widget: self.remove_group(w)
+        )
+
+        # Save on edits
+        nameEdit.editingFinished.connect(self.save_groups_to_settings)
+        activeHighEdit.editingFinished.connect(self.save_groups_to_settings)
+        activeLowEdit.editingFinished.connect(self.save_groups_to_settings)
+
+        # Layout: [Name][Active High][Active Low][Actions][VLine][Remove]
+        layout.addWidget(nameEdit)
+        layout.addWidget(activeHighEdit)
+        layout.addWidget(activeLowEdit)
+
+        actionsWidget = QWidget()
+        actionsLayout = QHBoxLayout(actionsWidget)
+        actionsLayout.setContentsMargins(0, 0, 0, 0)
+        actionsLayout.setSpacing(4)
+        actionsLayout.addWidget(activateBtn)
+        actionsLayout.addWidget(deactivateBtn)
+        layout.addWidget(actionsWidget)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.VLine)
+        sep.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(sep)
+
+        layout.addWidget(removeBtn)
+
+        # Column stretch to match header
+        layout.setStretch(0, 1)  # Name
+        layout.setStretch(1, 1)  # Active High
+        layout.setStretch(2, 1)  # Active Low
+        layout.setStretch(3, 0)  # Actions
+        layout.setStretch(4, 0)  # Separator
+        layout.setStretch(5, 0)  # Remove
+
+
+
+        # Track config
+        cfg = {
+            "row": row_widget,
+            "name": nameEdit,
+            "on": activeHighEdit,
+            "off": activeLowEdit,
+            "activate": activateBtn,
+            "deactivate": deactivateBtn,
+            "remove": removeBtn,
+        }
+        self.groupConfigs.append(cfg)
+
+        # Add row to UI
+        self.groupsContainer.addWidget(row_widget)
+
+        # Persist updated list
+        self.save_groups_to_settings()
+
+
+    def remove_group(self, row_widget: QWidget):
+        """
+        Remove the specified group row from UI and config list, then save.
+        """
+        # Find and remove from groupConfigs
+        idx = None
+        for i, cfg in enumerate(self.groupConfigs):
+            if cfg["row"] is row_widget:
+                idx = i
+                break
+        if idx is not None:
+            self.groupConfigs.pop(idx)
+
+        # Remove widget from layout
+        self.groupsContainer.removeWidget(row_widget)
+        row_widget.deleteLater()
+
+        # Persist updated list
+        self.save_groups_to_settings()
+
+    def load_groups_from_settings(self):
+        """
+        Load channel groups from QSettings. If none exist, create one example group.
+        """
+        data = self.settings.value("channel_groups", "", type=str)
+        # if not data:
+        #     # No saved groups: create a single example group (only once)
+        #     self.add_group(name="Example", active_high="0,1,2", active_low="3,4,5")
+        #     return
+
+        try:
+            groups = json.loads(data)
+        except Exception:
+            # If settings are corrupted, fall back to a single example group
+            # self.add_group(name="Example", active_high="0,1,2", active_low="3,4,5")
+            return
+
+        if not groups:
+            # Saved but empty: respect that (user removed all groups)
+            return
+
+        for g in groups:
+            self.add_group(
+                name=g.get("name", ""),
+                active_high=g.get("on", ""),
+                active_low=g.get("off", ""),
+            )
+
+    def save_groups_to_settings(self):
+        """
+        Save the current list of groups to QSettings as JSON.
+        """
+        groups = []
+        for cfg in self.groupConfigs:
+            groups.append(
+                {
+                    "name": cfg["name"].text(),
+                    "on": cfg["on"].text(),
+                    "off": cfg["off"].text(),
+                }
+            )
+        self.settings.setValue("channel_groups", json.dumps(groups))
+
+
     def parse_channel_list(self, text: str) -> set:
         """
         Parse a string like "0,1,4-7" into a set of valid channel indices.
         Ignores invalid entries and clamps to available channels.
         """
-        result: set[int] = set()
+        result = set()
         text = text.strip()
         if not text:
             return result
@@ -706,7 +895,6 @@ class MainWindow(QMainWindow):
                     if 0 <= i < n_channels:
                         result.add(i)
             else:
-                # Single index
                 try:
                     idx = int(part)
                 except ValueError:
@@ -715,8 +903,9 @@ class MainWindow(QMainWindow):
                     result.add(idx)
 
         return result
+
     
-    def on_group_action(self, index: int, activate: bool):
+    def on_group_action(self, row_widget: QWidget, activate: bool):
         """
         Momentary group action.
 
@@ -729,15 +918,23 @@ class MainWindow(QMainWindow):
 
         All other channels are left unchanged.
         """
-        cfg = self.groupConfigs[index]
+        # Find the config for this row
+        cfg = None
+        for c in self.groupConfigs:
+            if c["row"] is row_widget:
+                cfg = c
+                break
+        if cfg is None:
+            return
+
         active_high = self.parse_channel_list(cfg["on"].text())
         active_low = self.parse_channel_list(cfg["off"].text())
 
+        # Apply pattern only to channels in this group
         for i, (_, chan_btn) in enumerate(self.channelWidgets):
-            # Channels explicitly listed in this group are controlled; others untouched.
             if i in active_high:
                 old = chan_btn.blockSignals(True)
-                chan_btn.setChecked(activate)   # high on activate, low on deactivate
+                chan_btn.setChecked(activate)  # high on activate, low on deactivate
                 chan_btn.blockSignals(old)
             elif i in active_low:
                 old = chan_btn.blockSignals(True)
@@ -746,11 +943,12 @@ class MainWindow(QMainWindow):
 
         self.send_static_state()
 
-        name = cfg["name"].text() or f"Group {index+1}"
+        name = cfg["name"].text() or "Group"
         self.statusBar().showMessage(
             f"Group '{name}' {'activated' if activate else 'deactivated'}",
             2000,
         )
+
 
 
     def send_static_state(self):
