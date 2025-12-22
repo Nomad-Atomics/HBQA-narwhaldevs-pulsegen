@@ -447,11 +447,18 @@ class MainWindow(QMainWindow):
 
         self.groupsLayout.addLayout(self.groupsGrid)
 
-        # "Add group" button (Stored in a persistent widget to move it to the bottom)
+        # "Add group" button
         self.addGroupBtn = QPushButton("Add group")
         self.addGroupBtn.clicked.connect(self.add_group)
+
+        # --- WRAPPER FOR ADD GROUP (Matches Remove button structure) ---
+        self.addGroupWrapper = QWidget()
+        addGroupLayout = QHBoxLayout(self.addGroupWrapper)
+        addGroupLayout.setContentsMargins(0, 0, 0, 0)
+        addGroupLayout.setAlignment(Qt.AlignCenter) # Center alignment
+        addGroupLayout.addWidget(self.addGroupBtn)
         
-        # We start with the Add button at row 1 (immediately below headers)
+        # We start with the Add button at row 1
         self.addGroupRow = 1
         self._place_add_group_button(self.addGroupRow)
 
@@ -646,99 +653,105 @@ class MainWindow(QMainWindow):
         return lbl
 
     def _place_add_group_button(self, row_idx):
-        """Helper to move the 'Add group' button to a specific row in the grid."""
-        # Vertical separator for the add row
-        sep = QFrame()
-        sep.setFrameShape(QFrame.VLine)
-        sep.setFrameShadow(QFrame.Sunken)
-        
-        # We need to track these to remove them when adding a new group later
-        self.add_group_widgets = [sep, self.addGroupBtn]
+            """Helper to move the 'Add group' button to a specific row in the grid."""
+            # Vertical separator for the add row
+            sep = QFrame()
+            sep.setFrameShape(QFrame.VLine)
+            sep.setFrameShadow(QFrame.Sunken)
+            
+            # Track the wrapper (not the button) so we can remove it later
+            self.add_group_widgets = [sep, self.addGroupWrapper]
 
-        self.groupsGrid.addWidget(sep, row_idx, 4)
-        self.groupsGrid.addWidget(self.addGroupBtn, row_idx, 5)
-        
-        # Update our tracking index
-        self.addGroupRow = row_idx
+            self.groupsGrid.addWidget(sep, row_idx, 4)
+            
+            # Add the wrapper to the grid
+            self.groupsGrid.addWidget(self.addGroupWrapper, row_idx, 5)
+            
+            # Update our tracking index
+            self.addGroupRow = row_idx
 
     def add_group(self, name: str = "", active_high: str = "", active_low: str = ""):
-        # Determine insertion row (replace the current 'Add Group' button row)
-        row = self.addGroupRow
+            # Determine insertion row
+            row = self.addGroupRow
 
-        # 1. Temporarily remove the "Add Group" button widgets from the layout
-        # (Note: removeWidget doesn't delete the widget, just unplugs it)
-        for w in self.add_group_widgets:
-            self.groupsGrid.removeWidget(w)
-            w.setParent(None) # Detach visually
+            # 1. Temporarily remove "Add Group" widgets
+            for w in self.add_group_widgets:
+                self.groupsGrid.removeWidget(w)
+                w.setParent(None)
 
-        # 2. Create the new row widgets
-        nameEdit = QLineEdit()
-        nameEdit.setPlaceholderText("Group")
-        if name:
-            nameEdit.setText(name)
+            # 2. Create the new row widgets
+            nameEdit = QLineEdit()
+            nameEdit.setPlaceholderText("Group")
+            if name: nameEdit.setText(name)
 
-        activeHighEdit = QLineEdit()
-        activeHighEdit.setPlaceholderText("e.g. 0,1,5-7")
-        if active_high:
-            activeHighEdit.setText(active_high)
+            activeHighEdit = QLineEdit()
+            activeHighEdit.setPlaceholderText("e.g. 0,1,5-7")
+            if active_high: activeHighEdit.setText(active_high)
 
-        activeLowEdit = QLineEdit()
-        activeLowEdit.setPlaceholderText("e.g. 2,3")
-        if active_low:
-            activeLowEdit.setText(active_low)
+            activeLowEdit = QLineEdit()
+            activeLowEdit.setPlaceholderText("e.g. 2,3")
+            if active_low: activeLowEdit.setText(active_low)
 
-        # Actions Layout
-        activateBtn = QPushButton("Activate")
-        deactivateBtn = QPushButton("Deactivate")
-        actionsWidget = QWidget()
-        actionsLayout = QHBoxLayout(actionsWidget)
-        actionsLayout.setContentsMargins(0, 0, 0, 0)
-        actionsLayout.setSpacing(4)
-        actionsLayout.addWidget(activateBtn)
-        actionsLayout.addWidget(deactivateBtn)
+            # --- ACTIONS COLUMN (Wrapped in QWidget+Layout) ---
+            activateBtn = QPushButton("Activate")
+            deactivateBtn = QPushButton("Deactivate")
+            
+            actionsWidget = QWidget()
+            actionsLayout = QHBoxLayout(actionsWidget)
+            actionsLayout.setContentsMargins(0, 0, 0, 0)
+            actionsLayout.setSpacing(4)
+            actionsLayout.addWidget(activateBtn)
+            actionsLayout.addWidget(deactivateBtn)
 
-        # Separator
-        sep = QFrame()
-        sep.setFrameShape(QFrame.VLine)
-        sep.setFrameShadow(QFrame.Sunken)
+            # Separator
+            sep = QFrame()
+            sep.setFrameShape(QFrame.VLine)
+            sep.setFrameShadow(QFrame.Sunken)
 
-        # Remove Button
-        removeBtn = QPushButton("Remove")
-        # Ensure it matches the width of the "Add group" button for cleanliness
-        removeBtn.setFixedWidth(self.addGroupBtn.sizeHint().width())
+            # --- REMOVE COLUMN (Now Wrapped to Match!) ---
+            removeBtn = QPushButton("Remove")
+            
+            # Match the "Add group" width if desired
+            removeBtn.setFixedWidth(self.addGroupBtn.sizeHint().width())
 
-        # 3. Add widgets to Grid at the specific 'row'
-        self.groupsGrid.addWidget(nameEdit, row, 0)
-        self.groupsGrid.addWidget(activeHighEdit, row, 1)
-        self.groupsGrid.addWidget(activeLowEdit, row, 2)
-        self.groupsGrid.addWidget(actionsWidget, row, 3)
-        self.groupsGrid.addWidget(sep, row, 4)
-        self.groupsGrid.addWidget(removeBtn, row, 5)
+            # WRAPPER START
+            removeWidget = QWidget()
+            removeLayout = QHBoxLayout(removeWidget)
+            removeLayout.setContentsMargins(0, 0, 0, 0) # crucial
+            removeLayout.setAlignment(Qt.AlignCenter)   # ensures button stays centered
+            removeLayout.addWidget(removeBtn)
+            # WRAPPER END
 
-        # 4. Save Config
-        # We store the individual widgets so we can delete them later
-        cfg = {
-            "widgets": [nameEdit, activeHighEdit, activeLowEdit, actionsWidget, sep, removeBtn],
-            "name": nameEdit,
-            "on": activeHighEdit,
-            "off": activeLowEdit,
-        }
-        self.groupConfigs.append(cfg)
+            # 3. Add widgets to Grid
+            self.groupsGrid.addWidget(nameEdit, row, 0)
+            self.groupsGrid.addWidget(activeHighEdit, row, 1)
+            self.groupsGrid.addWidget(activeLowEdit, row, 2)
+            self.groupsGrid.addWidget(actionsWidget, row, 3)
+            self.groupsGrid.addWidget(sep, row, 4)
+            self.groupsGrid.addWidget(removeWidget, row, 5) # Add the WIDGET, not the button
 
-        # Wire signals
-        activateBtn.clicked.connect(lambda _, c=cfg: self.on_group_action(c, True))
-        deactivateBtn.clicked.connect(lambda _, c=cfg: self.on_group_action(c, False))
-        removeBtn.clicked.connect(lambda _, c=cfg: self.remove_group(c))
-        
-        nameEdit.editingFinished.connect(self.save_groups_to_settings)
-        activeHighEdit.editingFinished.connect(self.save_groups_to_settings)
-        activeLowEdit.editingFinished.connect(self.save_groups_to_settings)
+            # 4. Save Config
+            # IMPORTANT: Store 'removeWidget' in the list so it gets deleted properly later
+            cfg = {
+                "widgets": [nameEdit, activeHighEdit, activeLowEdit, actionsWidget, sep, removeWidget],
+                "name": nameEdit,
+                "on": activeHighEdit,
+                "off": activeLowEdit,
+            }
+            self.groupConfigs.append(cfg)
 
-        # 5. Re-add the "Add Group" button at the NEXT row
-        self._place_add_group_button(row + 1)
+            # Wire signals
+            activateBtn.clicked.connect(lambda _, c=cfg: self.on_group_action(c, True))
+            deactivateBtn.clicked.connect(lambda _, c=cfg: self.on_group_action(c, False))
+            removeBtn.clicked.connect(lambda _, c=cfg: self.remove_group(c))
+            
+            nameEdit.editingFinished.connect(self.save_groups_to_settings)
+            activeHighEdit.editingFinished.connect(self.save_groups_to_settings)
+            activeLowEdit.editingFinished.connect(self.save_groups_to_settings)
 
-        # Persist
-        self.save_groups_to_settings()
+            # 5. Re-add the "Add Group" button
+            self._place_add_group_button(row + 1)
+            self.save_groups_to_settings()
 
 
     def remove_group(self, cfg: dict):
