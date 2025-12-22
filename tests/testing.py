@@ -458,7 +458,6 @@ def run_timer_test(pg):
 if __name__ == "__main__":
 
     ndpulsegen.gui.main()
-    # ndpulsegen.gui_old.main()
     
     # pg = ndpulsegen.PulseGenerator()
     # print(pg.get_connected_devices())
