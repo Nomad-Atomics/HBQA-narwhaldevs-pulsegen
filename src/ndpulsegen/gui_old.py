@@ -1,5 +1,4 @@
 # gui.py (with explicit "Manual outputs" group for per-channel control)
-from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 import sys
 import struct
 import time
@@ -345,141 +344,88 @@ class PulseGenerator(QObject):
             for instr in instructions:
                 self.write_command(instr)
 
+
 class TickSpinBox(QDoubleSpinBox):
     """
-    Time spinbox backed by FPGA clock ticks (10 ns).
-
-    - Arrow/wheel stepping: exactly 1 tick.
-    - Manual typed edits snap to nearest tick on commit (Enter or focus out).
-    - Units displayed inside the box using Qt suffix.
-    - No digit grouping.
+    A SpinBox that behaves like a float (time units) but stores values 
+    internally as integer 'ticks' (10ns clock cycles) to avoid precision loss 
+    at high values and enforce hardware resolution limits.
     """
-
-    def __init__(self, parent=None, unit_scale: float = 1.0, decimals: int = 0, unit: str = ""):
+    # We define a custom signal if you want the raw ticks, 
+    # though standard valueChanged will emit the float representation.
+    # We'll stick to overriding the standard behavior to make it seamless.
+    
+    def __init__(self, parent=None, unit_scale=1.0, decimals=0):
         super().__init__(parent)
+        self.setButtonSymbols(QDoubleSpinBox.UpDownArrows)
+        self.unit_scale = unit_scale  # e.g., 1e-6 for microseconds
+        self.clock_period = 10e-9     # 10ns hardware clock
+        
+        # We handle the limits via setRange in 'units', but we need to match 
+        # the high precision. Standard QDoubleSpinBox uses floats.
+        # To strictly use Ints for storage we would use QSpinBox, but 
+        # QSpinBox doesn't show decimals easily. 
+        # Strategy: Use QDoubleSpinBox but map the step size exactly to 1 tick.
+        
+        self.setDecimals(decimals)
+        self.setStepType(QDoubleSpinBox.AdaptiveDecimalStepType)
+        
+        # 1 tick in the display unit
+        self.single_step_val = self.clock_period / self.unit_scale
+        self.setSingleStep(self.single_step_val)
 
-        self.unit_scale = float(unit_scale)     # display units -> seconds
-        self.clock_period = 10e-9               # 10 ns float for Qt range/step
-        self._tick_s = Decimal("1e-8")          # 10 ns exact
-
-        self.setDecimals(int(decimals))
-        self.setSuffix(f" {unit}" if unit else "")
-
-        # Step size = 1 tick in display units
-        self.setSingleStep(self.clock_period / self.unit_scale)
-
-        # Don't constantly commit while typing
-        self.setKeyboardTracking(False)
-
-        # Robust snapping hook for manual edits (Enter OR focus loss)
-        self.editingFinished.connect(self._snap_from_editor_text)
-
-    # ---------- parsing / snapping ----------
-
-    def _editor_text_to_units_decimal(self):
+    def textFromValue(self, value: float) -> str:
         """
-        Read the current lineEdit text, strip suffix/spaces, parse as Decimal in display units.
-        Returns None if parsing fails.
+        Custom formatting: 
+        1. Ensures we display 1ns resolution (filling with zeros).
+        2. Groups decimal places in threes using a thin space.
         """
-        le = self.lineEdit()
-        if le is None:
-            return None
+        # Convert the float value to a string with fixed precision
+        # We manually format to ensure we capture the full resolution
+        str_val = "{:.{prec}f}".format(value, prec=self.decimals())
+        
+        parts = str_val.split('.')
+        if len(parts) == 1:
+            return parts[0]
+            
+        integer_part = parts[0]
+        fractional_part = parts[1]
+        
+        # Group fractional part in 3s
+        grouped_fraction = ""
+        for i in range(0, len(fractional_part), 3):
+            chunk = fractional_part[i:i+3]
+            grouped_fraction += chunk + "\u2009" # Thin space
+            
+        return f"{integer_part}.{grouped_fraction.strip()}"
 
-        t = le.text().strip()
+    def validate(self, text: str, pos: int):
+        # Allow the user to type spaces/thin spaces, but strip them for validation
+        clean_text = text.replace(' ', '').replace('\u2009', '')
+        return super().validate(clean_text, pos)
 
-        suf = self.suffix()
-        if suf and t.endswith(suf):
-            t = t[:-len(suf)].rstrip()
+    def valueFromText(self, text: str) -> float:
+        clean_text = text.replace(' ', '').replace('\u2009', '')
+        return super().valueFromText(clean_text)
 
-        # Allow users to type spaces/commas casually
-        t = t.replace(" ", "").replace(",", "")
-
-        if not t:
-            return Decimal("0")
-
-        try:
-            return Decimal(t)
-        except InvalidOperation:
-            return None
-
-    def _snap_units_to_ticks(self, units_value: Decimal) -> Decimal:
-        """Snap Decimal display-units value to nearest whole tick, return in display units."""
-        seconds = units_value * Decimal(str(self.unit_scale))
-        ticks = (seconds / self._tick_s).to_integral_value(rounding=ROUND_HALF_UP)
-        snapped_seconds = ticks * self._tick_s
-        snapped_units = snapped_seconds / Decimal(str(self.unit_scale))
-        return snapped_units
-
-    def _snap_from_editor_text(self) -> None:
-        """
-        Called on editingFinished.
-        Parse what the user typed, snap to nearest tick, clamp to range, then display.
-        """
-        units_dec = self._editor_text_to_units_decimal()
-        if units_dec is None:
-            # If parsing failed, revert to last valid value
-            self.setValue(self.value())
-            return
-
-        snapped_units = self._snap_units_to_ticks(units_dec)
-
-        # Clamp in *units* to Qt min/max
-        min_u = Decimal(str(self.minimum()))
-        max_u = Decimal(str(self.maximum()))
-        if snapped_units < min_u:
-            snapped_units = min_u
-        elif snapped_units > max_u:
-            snapped_units = max_u
-
-        # This updates display (Qt will append suffix)
-        self.setValue(float(snapped_units))
-
-    # ---------- enforce tick stepping ----------
-
-    def stepBy(self, steps: int) -> None:
-        """Enforce stepping in integer ticks."""
-        ticks = self.get_ticks()
-        ticks_new = ticks + int(steps)
-
-        min_t = self._min_ticks()
-        max_t = self._max_ticks()
-        if ticks_new < min_t:
-            ticks_new = min_t
-        elif ticks_new > max_t:
-            ticks_new = max_t
-
-        self.set_value_from_ticks(ticks_new)
-
-    def _min_ticks(self) -> int:
-        units_val = Decimal(str(self.minimum()))
-        seconds = units_val * Decimal(str(self.unit_scale))
-        ticks = (seconds / self._tick_s).to_integral_value(rounding=ROUND_HALF_UP)
-        return int(ticks)
-
-    def _max_ticks(self) -> int:
-        units_val = Decimal(str(self.maximum()))
-        seconds = units_val * Decimal(str(self.unit_scale))
-        ticks = (seconds / self._tick_s).to_integral_value(rounding=ROUND_HALF_UP)
-        return int(ticks)
-
-    # ---------- your existing API ----------
-
-    def set_ticks_range(self, min_ticks: int, max_ticks: int):
-        min_val = (min_ticks * self.clock_period) / self.unit_scale
-        max_val = (max_ticks * self.clock_period) / self.unit_scale
+    def set_ticks_range(self, min_ticks, max_ticks):
+        """Helper to set range based on hardware ticks."""
+        min_val = min_ticks * self.clock_period / self.unit_scale
+        max_val = max_ticks * self.clock_period / self.unit_scale
         self.setRange(min_val, max_val)
 
     def get_ticks(self) -> int:
-        units_val = Decimal(str(self.value()))
-        seconds = units_val * Decimal(str(self.unit_scale))
-        ticks = (seconds / self._tick_s).to_integral_value(rounding=ROUND_HALF_UP)
-        return int(ticks)
+        """Returns the current value as integer clock cycles."""
+        # Value is in units. Convert to seconds, then divide by clock period.
+        val_units = self.value()
+        val_seconds = val_units * self.unit_scale
+        return int(round(val_seconds / self.clock_period))
 
     def set_value_from_ticks(self, ticks: int):
-        seconds = Decimal(int(ticks)) * self._tick_s
-        units = seconds / Decimal(str(self.unit_scale))
-        self.setValue(float(units))
-
+        """Sets the display value from integer clock cycles."""
+        val_seconds = ticks * self.clock_period
+        val_units = val_seconds / self.unit_scale
+        self.setValue(val_units)
 
 
 class MainWindow(QMainWindow):
@@ -673,9 +619,9 @@ class MainWindow(QMainWindow):
         inLayout.addWidget(self.waitCheckbox, 1, 1)
 
         # -- UPDATED: Delay Spinbox (ms) --
-        inLayout.addWidget(QLabel("Delay after powerline:"), 2, 0)
+        inLayout.addWidget(QLabel("Delay after powerline (ms):"), 2, 0)
         # 1ns resolution in ms requires 6 decimals (0.000 001 ms)
-        self.delaySpin = TickSpinBox(unit_scale=1e-3, decimals=6, unit="ms")
+        self.delaySpin = TickSpinBox(unit_scale=1e-3, decimals=6)
         # Range: 0 to 4194303 ticks
         self.delaySpin.set_ticks_range(0, 4194303)
         self.delaySpin.valueChanged.connect(self.on_delay_changed)
@@ -686,18 +632,18 @@ class MainWindow(QMainWindow):
         outLayout = QGridLayout(outBox)
         
         # -- UPDATED: Duration Spinbox (µs) --
-        outLayout.addWidget(QLabel("Duration:"), 0, 0)
+        outLayout.addWidget(QLabel("Duration (µs):"), 0, 0)
         # 1ns resolution in µs requires 3 decimals (0.001 µs)
-        self.trigOutLenSpin = TickSpinBox(unit_scale=1e-6, decimals=3, unit="µs")
+        self.trigOutLenSpin = TickSpinBox(unit_scale=1e-6, decimals=3)
         # Range: 0 to 255 ticks
         self.trigOutLenSpin.set_ticks_range(0, 255)
         self.trigOutLenSpin.valueChanged.connect(self.on_trigout_len_changed)
         outLayout.addWidget(self.trigOutLenSpin, 0, 1)
 
         # -- UPDATED: Delay Spinbox (s) --
-        outLayout.addWidget(QLabel("Delay:"), 1, 0)
+        outLayout.addWidget(QLabel("Delay (s):"), 1, 0)
         # 1ns resolution in s requires 9 decimals (0.000 000 001 s)
-        self.trigOutDelaySpin = TickSpinBox(unit_scale=1.0, decimals=9, unit="s")
+        self.trigOutDelaySpin = TickSpinBox(unit_scale=1.0, decimals=9)
         # Range: 0 to 72057594037927935 ticks
         # Note: Standard float precision (53 bits) cannot distinguish 10ns steps
         # at the high end of this range (56 bits). 
