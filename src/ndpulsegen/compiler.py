@@ -16,6 +16,18 @@ class Compiler:
         """Update the starting state for multiple channels."""
         self.starting_state.update(state_dict)
 
+    def set_sequence_duration(self, sequence_duration, time_unit='seconds'):
+        if time_unit == 'seconds':
+            self.sequence_duration = int(round(sequence_duration/Compiler.CLOCK_PERIOD))
+        else:
+            self.sequence_duration = int(sequence_duration)
+
+    def get_final_address(self):
+        return self.final_address
+    
+    def get_instructions(self):
+        return self.instructions
+
     def add_update(self, t: float,
                 state_dict: dict = None,
                 stop_and_wait=None,
@@ -147,7 +159,7 @@ class Compiler:
         to your own pulse_generator instance manually.
         """
         pulse_generator.write_instructions(self.instructions)
-        pulse_generator.write_device_options(final_address=len(self.instructions)-1)
+        pulse_generator.write_device_options(final_address=self.final_address)
 
 
 class Channel:

@@ -25,7 +25,12 @@ def basic_compiler_test():
 
     # print(pulse_duration)
     # print(cplr.updates)
+
     compiler.compile()
+
+    # [print(t*10e-9, val) for (t, val) in compiler.updates.items()]
+    # [print(x) for x in compiler.instructions]
+
 
 def basic_compiler_test_time_units():
 
@@ -71,6 +76,22 @@ def goto_compiler_test():
     # compiler.compile()
 
 
+def sequence_duration_test():
+
+    compiler = ndpulsegen.Compiler()
+
+    compiler.add_update(0, {0: True, 2:True}, time_unit='clock_cycles')
+    compiler.add_update(7, {0: False}, time_unit='clock_cycles')
+
+    # print(pulse_duration)
+    # print(cplr.updates)
+    compiler.set_sequence_duration(10, time_unit='clock_cycles')
+
+    compiler.compile()
+
+    # [print(t*10e-9, val) for (t, val) in compiler.updates.items()]
+    # [print(x) for x in compiler.instructions]
+
 if __name__ == "__main__":
 
     # pg = ndpulsegen.PulseGenerator()
@@ -78,8 +99,9 @@ if __name__ == "__main__":
     # pg.connect()
 
     # basic_compiler_test_time_units()
-    basic_compiler_test() 
+    # basic_compiler_test() 
     # goto_compiler_test()
+    sequence_duration_test()
 
     # for a in range(-1):
     #     print(a)
